@@ -1,0 +1,44 @@
+{
+  "frame_count": 148,
+  "pass_count": 4,
+  "total_row_decisions": 888,
+  "machine_config": {
+    "row_count": 6,
+    "row_spacing_m": 0.6,
+    "travel_speed_kmh": 6.0,
+    "sample_period_ms": 200,
+    "machine_center_to_row_origin_m": 0.0,
+    "row_offsets_m": [
+      -1.5,
+      -0.9,
+      -0.3,
+      0.3,
+      0.9,
+      1.5
+    ]
+  },
+  "prescription_bounds": {
+    "min_x": 0.0,
+    "max_x": 12.0,
+    "min_y": 0.0,
+    "max_y": 12.0
+  },
+  "status_counts": {
+    "ok": 777,
+    "out_of_field": 111
+  },
+  "selected_model_counts": {
+    "inverse_KAN": 732,
+    "inverse_MLP": 45
+  },
+  "domain_status_counts": {
+    "in_domain": 732,
+    "mass_extrapolation": 45,
+    "out_of_field": 111
+  },
+  "average_target_rate_kg_ha": 706.8211,
+  "average_target_speed_r_min": 43.9987,
+  "extrapolation_count": 45,
+  "prescription_path": "D:\\Personal\\eclipse_workspace\\12.10\\Variable_Rate_Fertilization_System\\samples\\prescription_grid.csv",
+  "exported_at": "2026-04-01T23:35:17"
+}
