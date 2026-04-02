@@ -3,8 +3,10 @@ from __future__ import annotations
 import os
 import tkinter as tk
 from pathlib import Path
+from tkinter import font as tkfont
 from tkinter import filedialog, messagebox, scrolledtext, ttk
 
+from .annotations import format_row_annotation
 from .controller import SimulationController
 from .defaults import (
     DEFAULT_KAN_ARTIFACT_DIR,
@@ -12,7 +14,14 @@ from .defaults import (
     DEFAULT_OUTPUT_ROOT,
     DEFAULT_SAMPLE_PRESCRIPTION,
 )
-from .domain import MachineConfig
+from .domain import Bounds, MachineConfig
+
+
+KAN_COLOR = "#059669"
+MLP_COLOR = "#d97706"
+OUT_COLOR = "#6b7280"
+PATH_COLOR = "#2563eb"
+CENTER_COLOR = "#111827"
 
 
 class FertilizerApp(tk.Tk):
@@ -22,6 +31,8 @@ class FertilizerApp(tk.Tk):
         self.geometry("1600x900")
         self.minsize(1360, 780)
         self.option_add("*Font", ("Microsoft YaHei UI", 10))
+        self.row_annotation_font = ("Microsoft YaHei UI", 8)
+        self.pass_label_font = ("Microsoft YaHei UI", 8, "bold")
 
         self.controller = SimulationController()
         self.current_frame_index = 0
@@ -38,10 +49,11 @@ class FertilizerApp(tk.Tk):
         self.longitudinal_offset_var = tk.StringVar(value="0.0")
         self.row_offsets_var = tk.StringVar(value="")
         self.frame_info_var = tk.StringVar(value="当前还没有仿真结果。")
-        self.summary_var = tk.StringVar(value="请先载入模型并导入处方图。")
+        self.summary_var = tk.StringVar(value="请先加载模型并导入处方图。")
 
         self._build_layout()
-        self.canvas.bind("<Configure>", lambda _event: self._redraw_canvas())
+        self.canvas.bind("<Configure>", lambda _event: self._redraw_map())
+        self.legend_canvas.bind("<Configure>", lambda _event: self._redraw_legend())
 
         if auto_load_models:
             self._load_default_models(show_message=False)
@@ -87,7 +99,12 @@ class FertilizerApp(tk.Tk):
         self._add_labeled_entry(machine_box, "作业速度 (km/h)", self.travel_speed_var)
         self._add_labeled_entry(machine_box, "采样周期 (ms)", self.sample_period_var)
         self._add_labeled_entry(machine_box, "纵向偏移 (m)", self.longitudinal_offset_var)
-        self._add_labeled_entry(machine_box, "排位偏移列表", self.row_offsets_var, note="留空则自动按行距居中生成")
+        self._add_labeled_entry(
+            machine_box,
+            "排位偏移列表",
+            self.row_offsets_var,
+            note="留空则自动按行距居中生成，例如：-1.5,-0.9,-0.3,0.3,0.9,1.5",
+        )
         ttk.Button(machine_box, text="恢复默认机器参数", command=self._reset_machine_defaults).pack(fill=tk.X, pady=(8, 0))
         ttk.Button(machine_box, text="运行仿真", command=self._run_simulation).pack(fill=tk.X, pady=(6, 0))
 
@@ -105,10 +122,27 @@ class FertilizerApp(tk.Tk):
 
     def _build_center_panel(self, parent: ttk.Frame) -> None:
         ttk.Label(parent, text="处方热力图与机具轨迹", font=("Microsoft YaHei UI", 12, "bold")).pack(anchor=tk.W)
-        self.canvas = tk.Canvas(parent, background="#f8fafc", highlightthickness=1, highlightbackground="#d1d5db")
-        self.canvas.pack(fill=tk.BOTH, expand=True, pady=(8, 8))
+        ttk.Label(
+            parent,
+            text="地图区已拆分为绘图区和独立图例区，用于避免轨迹、排号和图例互相干涉。",
+            foreground="#64748b",
+        ).pack(anchor=tk.W, pady=(2, 8))
+
+        map_frame = ttk.Frame(parent)
+        map_frame.pack(fill=tk.BOTH, expand=True)
+        self.canvas = tk.Canvas(map_frame, background="#f8fafc", highlightthickness=1, highlightbackground="#d1d5db")
+        self.canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self.legend_canvas = tk.Canvas(
+            map_frame,
+            width=220,
+            background="#ffffff",
+            highlightthickness=1,
+            highlightbackground="#d1d5db",
+        )
+        self.legend_canvas.pack(side=tk.RIGHT, fill=tk.Y, padx=(8, 0))
+
         slider_frame = ttk.Frame(parent)
-        slider_frame.pack(fill=tk.X)
+        slider_frame.pack(fill=tk.X, pady=(8, 0))
         ttk.Label(slider_frame, text="时间步").pack(anchor=tk.W)
         self.frame_slider = ttk.Scale(
             slider_frame,
@@ -125,10 +159,10 @@ class FertilizerApp(tk.Tk):
         summary_box.pack(fill=tk.X, pady=(0, 10))
         ttk.Label(summary_box, textvariable=self.summary_var, wraplength=420, justify=tk.LEFT).pack(anchor=tk.W)
 
-        export_actions = ttk.Frame(summary_box)
-        export_actions.pack(fill=tk.X, pady=(10, 0))
-        ttk.Button(export_actions, text="导出结果", command=self._export_results).pack(side=tk.LEFT, padx=(0, 8))
-        ttk.Button(export_actions, text="打开导出目录", command=self._open_last_export_dir).pack(side=tk.LEFT)
+        actions = ttk.Frame(summary_box)
+        actions.pack(fill=tk.X, pady=(10, 0))
+        ttk.Button(actions, text="导出结果与地图", command=self._export_results).pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Button(actions, text="打开导出目录", command=self._open_last_export_dir).pack(side=tk.LEFT)
 
         table_box = ttk.LabelFrame(parent, text="当前时刻单排决策", padding=10)
         table_box.pack(fill=tk.BOTH, expand=True)
@@ -159,7 +193,7 @@ class FertilizerApp(tk.Tk):
         ttk.Label(row, text=label, width=14).pack(side=tk.LEFT)
         ttk.Entry(row, textvariable=variable).pack(side=tk.LEFT, fill=tk.X, expand=True)
         if note:
-            ttk.Label(parent, text=note, foreground="#6b7280", wraplength=280).pack(anchor=tk.W, padx=(2, 0), pady=(0, 2))
+            ttk.Label(parent, text=note, foreground="#64748b", wraplength=280).pack(anchor=tk.W, padx=(2, 0), pady=(0, 2))
 
     def _choose_kan_dir(self) -> None:
         path = filedialog.askdirectory(title="选择 inverse_KAN 模型目录", initialdir=self.kan_dir_var.get() or str(Path.cwd()))
@@ -177,10 +211,9 @@ class FertilizerApp(tk.Tk):
             initialdir=str(DEFAULT_SAMPLE_PRESCRIPTION.parent),
             filetypes=[("CSV 文件", "*.csv")],
         )
-        if not path:
-            return
-        self.prescription_path_var.set(path)
-        self._load_prescription(path)
+        if path:
+            self.prescription_path_var.set(path)
+            self._load_prescription(path)
 
     def _choose_output_root(self) -> None:
         path = filedialog.askdirectory(title="选择导出根目录", initialdir=self.output_root_var.get() or str(Path.cwd()))
@@ -214,8 +247,9 @@ class FertilizerApp(tk.Tk):
         try:
             prescription = self.controller.load_prescription(path)
             self._log(f"已加载处方图：{prescription.source_path}")
-            self._redraw_canvas()
             self.summary_var.set("处方图已导入，可以直接运行仿真。")
+            self._redraw_map()
+            self._redraw_legend()
         except Exception as exc:  # noqa: BLE001
             self._log(f"处方图导入失败：{exc}")
             messagebox.showerror("处方图导入失败", str(exc))
@@ -250,12 +284,12 @@ class FertilizerApp(tk.Tk):
             if self.controller.prescription_map is None and self.prescription_path_var.get():
                 self._load_prescription(self.prescription_path_var.get())
             result = self.controller.run_simulation(self._parse_machine_config())
-            self._log("仿真完成。")
             self.current_frame_index = 0
             self.frame_slider.configure(to=max(len(result.frames) - 1, 0))
             self.frame_slider.set(0)
             self._refresh_summary()
             self._refresh_current_frame()
+            self._log("仿真完成。")
         except Exception as exc:  # noqa: BLE001
             self._log(f"仿真失败：{exc}")
             messagebox.showerror("仿真失败", str(exc))
@@ -267,17 +301,20 @@ class FertilizerApp(tk.Tk):
             return
         summary = result.summary
         model_counts = summary.get("selected_model_counts", {})
-        text = (
+        status_counts = summary.get("status_counts", {})
+        domain_counts = summary.get("domain_status_counts", {})
+        self.summary_var.set(
             f"总时间步：{summary.get('frame_count', 0)}\n"
             f"总作业往返：{summary.get('pass_count', 0)}\n"
             f"总单排决策数：{summary.get('total_row_decisions', 0)}\n"
             f"外推次数：{summary.get('extrapolation_count', 0)}\n"
-            f"KAN 调用次数：{model_counts.get('inverse_KAN', 0)}\n"
-            f"MLP 调用次数：{model_counts.get('inverse_MLP', 0)}\n"
+            f"KAN 调用：{model_counts.get('inverse_KAN', 0)}\n"
+            f"MLP 调用：{model_counts.get('inverse_MLP', 0)}\n"
+            f"地块外点数：{status_counts.get('out_of_field', 0)}\n"
+            f"域内点数：{domain_counts.get('in_domain', 0)}\n"
             f"平均目标施肥量：{summary.get('average_target_rate_kg_ha', 0)} kg/ha\n"
             f"平均目标转速：{summary.get('average_target_speed_r_min', 0)} r/min"
         )
-        self.summary_var.set(text)
 
     def _refresh_current_frame(self) -> None:
         result = self.controller.last_result
@@ -286,7 +323,7 @@ class FertilizerApp(tk.Tk):
             return
         frame = result.frames[self.current_frame_index]
         self.frame_info_var.set(
-            f"时间戳：{frame.timestamp_ms} ms，往返：第 {frame.pass_id} 趟，"
+            f"时间戳：{frame.timestamp_ms} ms，作业趟次：第 {frame.pass_id} 趟，"
             f"机具中心：({frame.machine_center_x_m:.2f}, {frame.machine_center_y_m:.2f}) m"
         )
         for item in self.decision_table.get_children():
@@ -306,7 +343,8 @@ class FertilizerApp(tk.Tk):
                     decision.status,
                 ),
             )
-        self._redraw_canvas()
+        self._redraw_map()
+        self._redraw_legend()
 
     def _on_slider_changed(self, _value: str) -> None:
         result = self.controller.last_result
@@ -317,15 +355,27 @@ class FertilizerApp(tk.Tk):
         self.current_frame_index = index
         self._refresh_current_frame()
 
+    def _map_layout(self, width: int, height: int) -> dict[str, int]:
+        return {"left": 70, "right": 30, "top": 26, "bottom": 68}
+
+    def _plot_area(self, width: int, height: int) -> tuple[int, int, int, int]:
+        layout = self._map_layout(width, height)
+        return (
+            layout["left"],
+            layout["top"],
+            width - layout["right"],
+            height - layout["bottom"],
+        )
+
     def _rate_to_color(self, rate: float, min_rate: float, max_rate: float) -> str:
         if max_rate <= min_rate:
             normalized = 0.5
         else:
             normalized = (rate - min_rate) / (max_rate - min_rate)
         normalized = max(0.0, min(normalized, 1.0))
-        red = int(22 + normalized * 200)
-        green = int(120 + (1.0 - normalized) * 90)
-        blue = int(180 - normalized * 120)
+        red = int(24 + normalized * 210)
+        green = int(130 + (1.0 - normalized) * 80)
+        blue = int(190 - normalized * 120)
         return f"#{red:02x}{green:02x}{blue:02x}"
 
     def _transform_point(self, x: float, y: float, width: int, height: int) -> tuple[float, float]:
@@ -333,23 +383,153 @@ class FertilizerApp(tk.Tk):
         if prescription is None:
             return x, y
         bounds = prescription.bounds
-        padding = 32
-        usable_width = max(width - padding * 2, 1)
-        usable_height = max(height - padding * 2, 1)
+        left, top, right, bottom = self._plot_area(width, height)
+        usable_width = max(right - left, 1)
+        usable_height = max(bottom - top, 1)
         scale_x = usable_width / max(bounds.width, 1e-6)
         scale_y = usable_height / max(bounds.height, 1e-6)
         scale = min(scale_x, scale_y)
-        canvas_x = padding + (x - bounds.min_x) * scale
-        canvas_y = height - (padding + (y - bounds.min_y) * scale)
+        canvas_x = left + (x - bounds.min_x) * scale
+        canvas_y = bottom - (y - bounds.min_y) * scale
         return canvas_x, canvas_y
 
-    def _redraw_canvas(self) -> None:
+    def _draw_axes(self, width: int, height: int, bounds: Bounds) -> None:
+        left, top, right, bottom = self._plot_area(width, height)
+        self.canvas.create_rectangle(left, top, right, bottom, outline="#cbd5e1", width=1)
+        tick_count = 5
+        for index in range(tick_count + 1):
+            ratio = index / tick_count
+            x = left + (right - left) * ratio
+            y = bottom - (bottom - top) * ratio
+            self.canvas.create_line(x, bottom, x, bottom + 6, fill="#64748b")
+            self.canvas.create_line(left - 6, y, left, y, fill="#64748b")
+            x_value = bounds.min_x + bounds.width * ratio
+            y_value = bounds.min_y + bounds.height * ratio
+            self.canvas.create_text(x, bottom + 18, text=f"{x_value:.1f}", fill="#334155", font=("Microsoft YaHei UI", 9))
+            self.canvas.create_text(left - 28, y, text=f"{y_value:.1f}", fill="#334155", font=("Microsoft YaHei UI", 9))
+
+        self.canvas.create_text((left + right) / 2, height - 20, text="X 坐标 / m", fill="#0f172a", font=("Microsoft YaHei UI", 10, "bold"))
+        self.canvas.create_text(22, (top + bottom) / 2, text="Y\n坐\n标\n/\nm", fill="#0f172a", font=("Microsoft YaHei UI", 10, "bold"))
+
+    def _measure_text_block(self, text: str, font: tuple) -> tuple[int, int]:
+        font_obj = tkfont.Font(font=font)
+        lines = text.splitlines() or [text]
+        width = max(font_obj.measure(line) for line in lines)
+        height = font_obj.metrics("linespace") * len(lines)
+        return width, height
+
+    def _draw_text_with_bg(
+        self,
+        x: float,
+        y: float,
+        text: str,
+        *,
+        anchor: str,
+        fill: str,
+        font: tuple,
+        justify: str | None = None,
+    ) -> None:
+        options = {"text": text, "anchor": anchor, "fill": fill, "font": font}
+        if justify is not None:
+            options["justify"] = justify
+        text_id = self.canvas.create_text(x, y, **options)
+        bbox = self.canvas.bbox(text_id)
+        if bbox:
+            rect_id = self.canvas.create_rectangle(
+                bbox[0] - 2,
+                bbox[1] - 1,
+                bbox[2] + 2,
+                bbox[3] + 1,
+                fill="#f8fafc",
+                outline="",
+            )
+            self.canvas.tag_lower(rect_id, text_id)
+
+    def _draw_cell_label(self, cell, left: float, top: float, right: float, bottom: float) -> None:
+        if (right - left) < 54 or (bottom - top) < 30:
+            return
+        self.canvas.create_text(
+            (left + right) / 2,
+            (top + bottom) / 2,
+            text=f"{cell.zone_id}\n{cell.target_rate_kg_ha:.0f}",
+            fill="#0f172a",
+            font=("Microsoft YaHei UI", 8),
+        )
+
+    def _display_row_point(
+        self,
+        row_x: float,
+        row_y: float,
+        row_index: int,
+        width: int,
+        height: int,
+    ) -> tuple[float, float]:
+        left, top, right, bottom = self._plot_area(width, height)
+        display_x = max(left + 6, min(right - 6, row_x))
+        display_y = row_y
+
+        if row_y < top + 8:
+            display_y = top + 10 + ((row_index - 1) % 3) * 14
+        elif row_y > bottom - 8:
+            display_y = bottom - 10 - ((row_index - 1) % 3) * 14
+
+        return display_x, display_y
+
+    def _row_label_position(
+        self,
+        row_x: float,
+        row_y: float,
+        row_index: int,
+        label_text: str,
+        width: int,
+        height: int,
+    ) -> tuple[float, float, str]:
+        left, top, right, bottom = self._plot_area(width, height)
+        display_x, display_y = self._display_row_point(row_x, row_y, row_index, width, height)
+        label_width, label_height = self._measure_text_block(label_text, self.row_annotation_font)
+        vertical_gap = 6
+        half_height = label_height / 2.0
+        horizontal_gap = 10
+        inner_padding = 6
+
+        if display_x <= left + label_width + horizontal_gap:
+            anchor = "w"
+            label_x = display_x + horizontal_gap
+        elif display_x >= right - label_width - horizontal_gap:
+            anchor = "e"
+            label_x = display_x - horizontal_gap
+        elif row_index % 2 == 0:
+            anchor = "w"
+            label_x = display_x + horizontal_gap
+        else:
+            anchor = "e"
+            label_x = display_x - horizontal_gap
+
+        if anchor == "w":
+            label_x = min(label_x, right - label_width - inner_padding)
+            label_x = max(label_x, left + inner_padding)
+        else:
+            label_x = max(label_x, left + label_width + inner_padding)
+            label_x = min(label_x, right - inner_padding)
+
+        if display_y <= top + half_height + vertical_gap:
+            label_y = display_y + half_height + vertical_gap
+        elif display_y >= bottom - half_height - vertical_gap:
+            label_y = display_y - half_height - vertical_gap
+        else:
+            label_y = display_y - half_height - vertical_gap
+
+        label_y = max(top + half_height + inner_padding, min(bottom - half_height - inner_padding, label_y))
+        return label_x, label_y, anchor
+
+    def _redraw_map(self) -> None:
         self.canvas.delete("all")
         prescription = self.controller.prescription_map
-        width = max(self.canvas.winfo_width(), 640)
-        height = max(self.canvas.winfo_height(), 520)
+        width = max(self.canvas.winfo_width(), 720)
+        height = max(self.canvas.winfo_height(), 560)
+
         if prescription is None:
-            self.canvas.create_text(width / 2, height / 2, text="请先导入处方图。", fill="#475569")
+            self.canvas.create_text(width / 2, height / 2, text="请先导入处方图。", fill="#475569", font=("Microsoft YaHei UI", 12))
             return
 
         min_rate, max_rate = prescription.rate_range()
@@ -358,55 +538,170 @@ class FertilizerApp(tk.Tk):
             right, bottom = self._transform_point(cell.right, cell.bottom, width, height)
             fill = self._rate_to_color(cell.target_rate_kg_ha, min_rate, max_rate)
             self.canvas.create_rectangle(left, top, right, bottom, fill=fill, outline="#ffffff")
+            self._draw_cell_label(cell, left, top, right, bottom)
+
+        self._draw_axes(width, height, prescription.bounds)
 
         result = self.controller.last_result
-        if result is not None and result.frames:
-            pass_points: dict[int, list[tuple[float, float]]] = {}
-            for frame in result.frames:
-                pass_points.setdefault(frame.pass_id, []).append(
-                    self._transform_point(frame.machine_center_x_m, frame.machine_center_y_m, width, height)
-                )
-            for points in pass_points.values():
-                if len(points) > 1:
-                    flattened = [value for point in points for value in point]
-                    self.canvas.create_line(*flattened, fill="#1d4ed8", width=2, smooth=True)
+        if result is None or not result.frames:
+            return
 
-            frame = result.frames[self.current_frame_index]
-            center_x, center_y = self._transform_point(frame.machine_center_x_m, frame.machine_center_y_m, width, height)
-            self.canvas.create_oval(center_x - 5, center_y - 5, center_x + 5, center_y + 5, fill="#111827", outline="")
-            for decision in frame.row_decisions:
-                row_x, row_y = self._transform_point(decision.x_m, decision.y_m, width, height)
+        left, top, right, bottom = self._plot_area(width, height)
+        pass_points: dict[int, list[tuple[float, float]]] = {}
+        for frame in result.frames:
+            pass_points.setdefault(frame.pass_id, []).append(
+                self._transform_point(frame.machine_center_x_m, frame.machine_center_y_m, width, height)
+            )
+        for pass_id, points in pass_points.items():
+            if len(points) > 1:
+                flattened = [value for point in points for value in point]
+                self.canvas.create_line(*flattened, fill=PATH_COLOR, width=2, smooth=True, stipple="gray50")
+                max_x_point = max(points, key=lambda point: point[0])
+                label_y = max(top + 10, min(bottom - 10, max_x_point[1] - 10))
+                self._draw_text_with_bg(right - 6, label_y, f"P{pass_id}", anchor="e", fill=PATH_COLOR, font=self.pass_label_font)
+
+        frame = result.frames[self.current_frame_index]
+        center_x, center_y = self._transform_point(frame.machine_center_x_m, frame.machine_center_y_m, width, height)
+        ordered_rows = sorted(frame.row_decisions, key=lambda item: item.row_index)
+        valid_rows = [item for item in ordered_rows if item.status != "out_of_field"]
+        if len(valid_rows) >= 2:
+            line_points = [self._transform_point(item.x_m, item.y_m, width, height) for item in valid_rows]
+            flattened = [value for point in line_points for value in point]
+            self.canvas.create_line(*flattened, fill=CENTER_COLOR, width=3)
+
+        self.canvas.create_oval(center_x - 6, center_y - 6, center_x + 6, center_y + 6, fill=CENTER_COLOR, outline="")
+        arrow_length = 26
+        arrow_x = max(left + 6, min(right - 6, center_x + arrow_length * frame.direction_sign))
+        self.canvas.create_line(center_x, center_y, arrow_x, center_y, fill=CENTER_COLOR, width=2, arrow=tk.LAST)
+
+        for decision in ordered_rows:
+            row_x, row_y = self._transform_point(decision.x_m, decision.y_m, width, height)
+            display_x, display_y = self._display_row_point(row_x, row_y, decision.row_index, width, height)
+            if decision.status == "out_of_field":
+                self.canvas.create_line(display_x - 5, display_y - 5, display_x + 5, display_y + 5, fill=OUT_COLOR, width=2)
+                self.canvas.create_line(display_x + 5, display_y - 5, display_x - 5, display_y + 5, fill=OUT_COLOR, width=2)
+                label_color = OUT_COLOR
+            else:
                 if decision.selected_model == "inverse_KAN":
-                    fill = "#059669"
-                elif decision.selected_model == "inverse_MLP":
-                    fill = "#d97706"
+                    self.canvas.create_oval(display_x - 5, display_y - 5, display_x + 5, display_y + 5, fill=KAN_COLOR, outline="")
+                    label_color = KAN_COLOR
                 else:
-                    fill = "#6b7280"
-                radius = 4 if decision.status == "ok" else 3
-                self.canvas.create_oval(
-                    row_x - radius,
-                    row_y - radius,
-                    row_x + radius,
-                    row_y + radius,
-                    fill=fill,
-                    outline="",
-                )
-        self.canvas.create_text(
-            12,
-            12,
-            anchor=tk.NW,
-            text="绿色：KAN  |  橙色：MLP  |  灰色：地块外",
-            fill="#0f172a",
-        )
+                    self.canvas.create_rectangle(display_x - 5, display_y - 5, display_x + 5, display_y + 5, fill=MLP_COLOR, outline="")
+                    label_color = MLP_COLOR
+
+            label_text = format_row_annotation(decision)
+            label_x, label_y, anchor = self._row_label_position(
+                row_x,
+                row_y,
+                decision.row_index,
+                label_text,
+                width,
+                height,
+            )
+            justify = tk.RIGHT if anchor == "e" else tk.LEFT
+            self._draw_text_with_bg(
+                label_x,
+                label_y,
+                label_text,
+                anchor=anchor,
+                fill=label_color,
+                font=self.row_annotation_font,
+                justify=justify,
+            )
+
+    def _redraw_legend(self) -> None:
+        self.legend_canvas.delete("all")
+        width = max(self.legend_canvas.winfo_width(), 180)
+        height = max(self.legend_canvas.winfo_height(), 560)
+        self.legend_canvas.create_text(16, 16, anchor=tk.NW, text="地图图例", fill="#0f172a", font=("Microsoft YaHei UI", 11, "bold"))
+
+        prescription = self.controller.prescription_map
+        if prescription is None:
+            self.legend_canvas.create_text(width / 2, height / 2, text="请先导入处方图。", fill="#64748b")
+            return
+
+        min_rate, max_rate = prescription.rate_range()
+        self.legend_canvas.create_text(16, 42, anchor=tk.NW, text="目标施肥量", fill="#334155", font=("Microsoft YaHei UI", 9))
+        self.legend_canvas.create_text(16, 58, anchor=tk.NW, text="kg/ha", fill="#64748b", font=("Microsoft YaHei UI", 9))
+
+        bar_left = 40
+        bar_top = 88
+        bar_right = 62
+        bar_bottom = min(height - 210, 390)
+        steps = 48
+        height_step = (bar_bottom - bar_top) / steps
+        for index in range(steps):
+            ratio = index / max(steps - 1, 1)
+            rate = max_rate - (max_rate - min_rate) * ratio
+            y0 = bar_top + index * height_step
+            y1 = y0 + height_step + 1
+            color = self._rate_to_color(rate, min_rate, max_rate)
+            self.legend_canvas.create_rectangle(bar_left, y0, bar_right, y1, outline="", fill=color)
+        self.legend_canvas.create_rectangle(bar_left, bar_top, bar_right, bar_bottom, outline="#94a3b8")
+        self.legend_canvas.create_text(bar_right + 18, bar_top, anchor=tk.W, text=f"{max_rate:.0f}", fill="#0f172a", font=("Microsoft YaHei UI", 9))
+        self.legend_canvas.create_text(bar_right + 18, (bar_top + bar_bottom) / 2, anchor=tk.W, text=f"{(min_rate + max_rate) / 2:.0f}", fill="#334155", font=("Microsoft YaHei UI", 9))
+        self.legend_canvas.create_text(bar_right + 18, bar_bottom, anchor=tk.W, text=f"{min_rate:.0f}", fill="#0f172a", font=("Microsoft YaHei UI", 9))
+
+        legend_top = bar_bottom + 28
+        self.legend_canvas.create_text(16, legend_top, anchor=tk.NW, text="标记说明", fill="#0f172a", font=("Microsoft YaHei UI", 10, "bold"))
+        items = [
+            ("oval", KAN_COLOR, "KAN 域内决策"),
+            ("rect", MLP_COLOR, "MLP 外推决策"),
+            ("cross", OUT_COLOR, "地块外排点"),
+            ("line", CENTER_COLOR, "机具中心 / 跨排连线"),
+            ("path", PATH_COLOR, "历史轨迹"),
+        ]
+        y_cursor = legend_top + 26
+        for shape, color, text in items:
+            if shape == "oval":
+                self.legend_canvas.create_oval(18, y_cursor, 28, y_cursor + 10, fill=color, outline="")
+            elif shape == "rect":
+                self.legend_canvas.create_rectangle(18, y_cursor, 28, y_cursor + 10, fill=color, outline="")
+            elif shape == "cross":
+                self.legend_canvas.create_line(18, y_cursor, 28, y_cursor + 10, fill=color, width=2)
+                self.legend_canvas.create_line(28, y_cursor, 18, y_cursor + 10, fill=color, width=2)
+            elif shape == "line":
+                self.legend_canvas.create_line(18, y_cursor + 5, 34, y_cursor + 5, fill=color, width=2)
+                self.legend_canvas.create_oval(24, y_cursor + 1, 28, y_cursor + 9, fill=color, outline="")
+            else:
+                self.legend_canvas.create_line(18, y_cursor + 5, 34, y_cursor + 5, fill=color, width=2, stipple="gray50")
+            self.legend_canvas.create_text(44, y_cursor + 5, anchor=tk.W, text=text, fill="#334155", font=("Microsoft YaHei UI", 9))
+            y_cursor += 24
+
+        result = self.controller.last_result
+        if result is not None:
+            summary = result.summary
+            extra_top = y_cursor + 12
+            self.legend_canvas.create_text(16, extra_top, anchor=tk.NW, text="当前统计", fill="#0f172a", font=("Microsoft YaHei UI", 10, "bold"))
+            self.legend_canvas.create_text(
+                16,
+                extra_top + 22,
+                anchor=tk.NW,
+                text=(
+                    f"外推次数：{summary.get('extrapolation_count', 0)}\n"
+                    f"总单排决策：{summary.get('total_row_decisions', 0)}"
+                ),
+                fill="#334155",
+                font=("Microsoft YaHei UI", 9),
+            )
 
     def _export_results(self) -> None:
         try:
-            artifacts = self.controller.export_last_result(self.output_root_var.get())
+            artifacts = self.controller.export_last_result(
+                self.output_root_var.get(),
+                highlighted_frame_index=self.current_frame_index,
+            )
             self.last_export_dir = artifacts.output_dir
             self._log(f"导出完成：{artifacts.output_dir}")
             messagebox.showinfo(
                 "导出完成",
-                f"已生成：\n{artifacts.row_command_timeline}\n{artifacts.model_routing_trace}\n{artifacts.simulation_summary}",
+                "已生成以下文件：\n"
+                f"{artifacts.row_command_timeline}\n"
+                f"{artifacts.model_routing_trace}\n"
+                f"{artifacts.simulation_summary}\n"
+                f"{artifacts.map_overview_png}\n"
+                f"{artifacts.map_current_frame_png}\n"
+                f"{artifacts.map_legend_png}",
             )
         except Exception as exc:  # noqa: BLE001
             self._log(f"导出失败：{exc}")

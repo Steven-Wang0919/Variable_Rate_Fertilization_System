@@ -6,6 +6,7 @@
 - 按单个排肥器独立生成变量施肥决策
 - 根据处方图和机具参数进行作业仿真
 - 导出时间线控制指令、模型路由追踪和仿真摘要
+- 导出地图总览图、当前时刻细节图和独立图例图
 
 系统默认复用同级目录 [`ComPare`](D:/Personal/eclipse_workspace/12.10/ComPare) 中已经导出的论文模型工件：
 
@@ -37,8 +38,19 @@ target_mass_g_min = target_rate_kg_ha * row_spacing_m * travel_speed_kmh * 1.666
 桌面端基于标准库 `tkinter` 实现，默认三栏布局：
 
 - 左侧：处方图、模型包、机器参数
-- 中间：处方热力图、机具轨迹、单排位置
+- 中间：带坐标轴、热力图图例、机具轨迹、当前跨排行走状态的地图视图
 - 右侧：当前时刻排位决策表、模型路由摘要、导出按钮
+
+### 1.4 导出内容
+
+每次导出默认生成 6 份文件：
+
+- `row_command_timeline.csv`
+- `model_routing_trace.csv`
+- `simulation_summary.json`
+- `map_overview.png`
+- `map_current_frame.png`
+- `map_legend.png`
 
 ## 2. 目录结构
 
@@ -73,6 +85,13 @@ target_mass_g_min = target_rate_kg_ha * row_spacing_m * travel_speed_kmh * 1.666
 ```powershell
 D:\ProgramData\miniconda3\envs\fertilizer_gpu\python.exe main.py
 ```
+
+如果你不想每次都进 PyCharm 或终端，项目根目录已经提供了双击启动文件：
+
+- [Launch_VRF_System.bat](D:/Personal/eclipse_workspace/12.10/Variable_Rate_Fertilization_System/Launch_VRF_System.bat)：普通双击启动
+- [Launch_VRF_System_Hidden.vbs](D:/Personal/eclipse_workspace/12.10/Variable_Rate_Fertilization_System/Launch_VRF_System_Hidden.vbs)：隐藏命令行窗口启动
+
+日常使用建议直接双击 `Launch_VRF_System_Hidden.vbs`。
 
 如果你使用当前系统 Python，也可以先安装依赖后运行：
 

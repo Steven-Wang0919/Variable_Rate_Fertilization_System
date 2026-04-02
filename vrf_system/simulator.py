@@ -115,6 +115,7 @@ class FieldSimulator:
             frames=frames,
             machine_config=machine_config,
             prescription_path=prescription_map.source_path,
+            prescription_cells=list(prescription_map.cells),
             summary=summary,
         )
 

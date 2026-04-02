@@ -149,6 +149,9 @@ class ExportedArtifacts:
     row_command_timeline: Path
     model_routing_trace: Path
     simulation_summary: Path
+    map_overview_png: Path
+    map_current_frame_png: Path
+    map_legend_png: Path
 
     def to_dict(self) -> dict[str, str]:
         return {
@@ -156,6 +159,9 @@ class ExportedArtifacts:
             "row_command_timeline": str(self.row_command_timeline),
             "model_routing_trace": str(self.model_routing_trace),
             "simulation_summary": str(self.simulation_summary),
+            "map_overview_png": str(self.map_overview_png),
+            "map_current_frame_png": str(self.map_current_frame_png),
+            "map_legend_png": str(self.map_legend_png),
         }
 
 
@@ -164,6 +170,7 @@ class SimulationResult:
     frames: list[SimulationFrame]
     machine_config: MachineConfig
     prescription_path: Path
+    prescription_cells: list[PrescriptionCell]
     summary: dict[str, Any]
 
     def flatten_decisions(self) -> list[RowDecision]:

@@ -46,6 +46,9 @@ class EngineAndExportTests(unittest.TestCase):
             self.assertTrue(artifacts.row_command_timeline.exists())
             self.assertTrue(artifacts.model_routing_trace.exists())
             self.assertTrue(artifacts.simulation_summary.exists())
+            self.assertTrue(artifacts.map_overview_png.exists())
+            self.assertTrue(artifacts.map_current_frame_png.exists())
+            self.assertTrue(artifacts.map_legend_png.exists())
 
             routing_df = pd.read_csv(artifacts.model_routing_trace)
             self.assertIn("selected_model", routing_df.columns)
@@ -54,3 +57,4 @@ class EngineAndExportTests(unittest.TestCase):
             summary = json.loads(artifacts.simulation_summary.read_text(encoding="utf-8"))
             self.assertGreater(summary["extrapolation_count"], 0)
             self.assertGreater(summary["total_row_decisions"], 0)
+            self.assertIn("visual_assets", summary)

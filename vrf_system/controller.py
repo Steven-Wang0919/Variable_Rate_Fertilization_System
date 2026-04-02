@@ -57,7 +57,15 @@ class SimulationController:
         self.last_result = simulator.run(self.prescription_map, config)
         return self.last_result
 
-    def export_last_result(self, output_root: str | Path | None = None):
+    def export_last_result(
+        self,
+        output_root: str | Path | None = None,
+        highlighted_frame_index: int = 0,
+    ):
         if self.last_result is None:
             raise ValueError("当前没有可导出的仿真结果。")
-        return export_simulation_result(self.last_result, output_root=output_root)
+        return export_simulation_result(
+            self.last_result,
+            output_root=output_root,
+            highlighted_frame_index=highlighted_frame_index,
+        )

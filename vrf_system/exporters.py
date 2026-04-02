@@ -8,11 +8,13 @@ import pandas as pd
 
 from .defaults import DEFAULT_OUTPUT_ROOT
 from .domain import ExportedArtifacts, SimulationResult
+from .visualization import export_visual_assets
 
 
 def export_simulation_result(
     result: SimulationResult,
     output_root: str | Path | None = None,
+    highlighted_frame_index: int = 0,
 ) -> ExportedArtifacts:
     root = Path(output_root) if output_root is not None else DEFAULT_OUTPUT_ROOT
     output_dir = Path(root).resolve() / datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -23,6 +25,11 @@ def export_simulation_result(
     row_command_timeline = output_dir / "row_command_timeline.csv"
     routing_trace = output_dir / "model_routing_trace.csv"
     summary_path = output_dir / "simulation_summary.json"
+    visual_assets = export_visual_assets(
+        result,
+        output_dir=output_dir,
+        frame_index=highlighted_frame_index,
+    )
 
     decision_df.to_csv(row_command_timeline, index=False, encoding="utf-8-sig")
     decision_df[
@@ -43,6 +50,7 @@ def export_simulation_result(
     summary_payload = dict(result.summary)
     summary_payload["prescription_path"] = str(result.prescription_path)
     summary_payload["exported_at"] = datetime.now().isoformat(timespec="seconds")
+    summary_payload["visual_assets"] = {key: str(value) for key, value in visual_assets.items()}
     summary_path.write_text(
         json.dumps(summary_payload, ensure_ascii=False, indent=2),
         encoding="utf-8",
@@ -53,4 +61,7 @@ def export_simulation_result(
         row_command_timeline=row_command_timeline,
         model_routing_trace=routing_trace,
         simulation_summary=summary_path,
+        map_overview_png=visual_assets["map_overview_png"],
+        map_current_frame_png=visual_assets["map_current_frame_png"],
+        map_legend_png=visual_assets["map_legend_png"],
     )
