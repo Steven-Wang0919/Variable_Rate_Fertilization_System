@@ -161,6 +161,10 @@ def sidebar_axes(figure: object, main_ax: object) -> tuple[list[object], list[ob
     return legend_axes, colorbar_axes
 
 
+def pane_names(app: FertilizerApp) -> tuple[str, ...]:
+    return tuple(app.main_pane.panes())
+
+
 class UISmokeTests(unittest.TestCase):
     def create_app(self) -> FertilizerApp:
         try:
@@ -179,6 +183,70 @@ class UISmokeTests(unittest.TestCase):
         self.assertEqual(str(app.frame_slider.cget("state")), "disabled")
         self.assertGreaterEqual(int(app.frame_slider.cget("width")), 20)
         self.assertGreaterEqual(int(app.frame_slider.cget("sliderlength")), 30)
+        self.assertEqual(pane_names(app), (str(app.left_panel), str(app.center_panel), str(app.right_panel)))
+        self.assertEqual(app.left_toggle_text.get(), "收起左栏")
+        self.assertEqual(app.right_toggle_text.get(), "收起右栏")
+        app.destroy()
+
+    def test_side_panels_should_toggle_independently_and_restore_order(self) -> None:
+        app = self.create_app()
+
+        app.left_toggle_button.invoke()
+        app.update_idletasks()
+        self.assertEqual(pane_names(app), (str(app.center_panel), str(app.right_panel)))
+        self.assertEqual(app.left_toggle_text.get(), "展开左栏")
+        self.assertEqual(app.right_toggle_text.get(), "收起右栏")
+
+        app.right_toggle_button.invoke()
+        app.update_idletasks()
+        self.assertEqual(pane_names(app), (str(app.center_panel),))
+        self.assertEqual(app.left_toggle_text.get(), "展开左栏")
+        self.assertEqual(app.right_toggle_text.get(), "展开右栏")
+
+        app.left_toggle_button.invoke()
+        app.update_idletasks()
+        self.assertEqual(pane_names(app), (str(app.left_panel), str(app.center_panel)))
+        self.assertEqual(app.left_toggle_text.get(), "收起左栏")
+        self.assertEqual(app.right_toggle_text.get(), "展开右栏")
+
+        app.right_toggle_button.invoke()
+        app.update_idletasks()
+        self.assertEqual(pane_names(app), (str(app.left_panel), str(app.center_panel), str(app.right_panel)))
+        self.assertEqual(app.left_toggle_text.get(), "收起左栏")
+        self.assertEqual(app.right_toggle_text.get(), "收起右栏")
+        app.destroy()
+
+    def test_side_panels_should_restore_previous_widths_after_expand(self) -> None:
+        app = self.create_app()
+        app.deiconify()
+        app.update()
+        total_width = app.main_pane.winfo_width()
+
+        app.main_pane.sashpos(0, 430)
+        app.main_pane.sashpos(1, total_width - 340)
+        app.update()
+        left_before = app.left_panel.winfo_width()
+        right_before = app.right_panel.winfo_width()
+
+        app.left_toggle_button.invoke()
+        app.update()
+        app.left_toggle_button.invoke()
+        app.update()
+        self.assertAlmostEqual(app.left_panel.winfo_width(), left_before, delta=60)
+        self.assertAlmostEqual(app.right_panel.winfo_width(), right_before, delta=60)
+
+        app.main_pane.sashpos(0, 390)
+        app.main_pane.sashpos(1, total_width - 300)
+        app.update()
+        left_before = app.left_panel.winfo_width()
+        right_before = app.right_panel.winfo_width()
+
+        app.right_toggle_button.invoke()
+        app.update()
+        app.right_toggle_button.invoke()
+        app.update()
+        self.assertAlmostEqual(app.left_panel.winfo_width(), left_before, delta=60)
+        self.assertAlmostEqual(app.right_panel.winfo_width(), right_before, delta=60)
         app.destroy()
 
     def test_preview_tabs_should_show_empty_state_without_prescription_or_result(self) -> None:
@@ -256,6 +324,7 @@ class UISmokeTests(unittest.TestCase):
 
         app.frame_slider.set(1)
         app._on_slider_changed("1")
+        app._cancel_live_preview_update()
         app._process_live_preview_update()
         app.update_idletasks()
 
@@ -280,6 +349,37 @@ class UISmokeTests(unittest.TestCase):
         self.assertIs(app.preview_canvases["overview"], overview_canvas)
         self.assertIs(app.preview_canvases["current"], current_canvas)
         self.assertIs(app.preview_renderers["overview"], overview_renderer)
+        app.destroy()
+
+    def test_collapsed_side_panels_should_not_break_preview_updates(self) -> None:
+        app = self.create_app()
+        prescription = build_sample_prescription_map()
+        result = build_sample_result()
+
+        app.controller.prescription_map = prescription
+        app.controller.last_result = result
+        app.frame_slider.configure(to=len(result.frames) - 1)
+        app._set_result_state(has_result=True)
+        app._refresh_summary()
+        app._refresh_current_frame_details(refresh_table=True)
+        app._render_preview_tabs(force=True)
+        app.update_idletasks()
+
+        app.left_toggle_button.invoke()
+        app.right_toggle_button.invoke()
+        app.update_idletasks()
+        self.assertEqual(pane_names(app), (str(app.center_panel),))
+
+        app.frame_slider.set(1)
+        app._on_slider_changed("1")
+        app._cancel_live_preview_update()
+        app._process_live_preview_update()
+        app._on_slider_released(None)  # type: ignore[arg-type]
+        app.update_idletasks()
+
+        self.assertIn("500 ms", app.frame_info_var.get())
+        self.assertEqual(app.preview_renderers["overview"].rendered_frame_index, 1)
+        self.assertEqual(len(app.decision_table.get_children()), len(result.frames[1].row_decisions))
         app.destroy()
 
     def test_switching_to_dirty_current_tab_should_render_detailed_final_frame(self) -> None:

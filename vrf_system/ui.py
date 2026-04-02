@@ -45,6 +45,11 @@ SLIDER_TROUGH_ACTIVE = "#99f6e4"
 SLIDER_TROUGH_DISABLED = "#dbe4ee"
 SLIDER_HANDLE_ACTIVE = "#0f766e"
 SLIDER_HANDLE_DISABLED = "#94a3b8"
+LEFT_PANEL_WEIGHT = 30
+CENTER_PANEL_WEIGHT = 50
+RIGHT_PANEL_WEIGHT = 20
+MIN_SIDE_PANEL_WIDTH = 260
+MIN_CENTER_PANEL_WIDTH = 640
 
 
 class FertilizerApp(tk.Tk):
@@ -80,6 +85,20 @@ class FertilizerApp(tk.Tk):
         self.row_offsets_var = tk.StringVar(value="")
         self.frame_info_var = tk.StringVar(value="当前还没有仿真结果。")
         self.summary_var = tk.StringVar(value="请先加载模型并导入处方图。")
+
+        self.left_toggle_text = tk.StringVar(value="收起左栏")
+        self.right_toggle_text = tk.StringVar(value="收起右栏")
+
+        self.main_pane: ttk.PanedWindow | None = None
+        self.left_panel: ttk.Frame | None = None
+        self.center_panel: ttk.Frame | None = None
+        self.right_panel: ttk.Frame | None = None
+        self.left_toggle_button: ttk.Button | None = None
+        self.right_toggle_button: ttk.Button | None = None
+        self.left_collapsed = False
+        self.right_collapsed = False
+        self.saved_left_width: int | None = None
+        self.saved_right_width: int | None = None
 
         self.preview_frames: dict[str, ttk.Frame] = {}
         self.preview_hosts: dict[str, ttk.Frame] = {}
@@ -130,19 +149,19 @@ class FertilizerApp(tk.Tk):
         style.configure("Treeview.Heading", font=("Microsoft YaHei UI", 9, "bold"))
 
     def _build_layout(self) -> None:
-        main_pane = ttk.PanedWindow(self, orient=tk.HORIZONTAL)
-        main_pane.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
+        self.main_pane = ttk.PanedWindow(self, orient=tk.HORIZONTAL)
+        self.main_pane.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
 
-        left = ttk.Frame(main_pane, style="Card.TFrame", padding=14)
-        center = ttk.Frame(main_pane, style="Card.TFrame", padding=14)
-        right = ttk.Frame(main_pane, style="Card.TFrame", padding=14)
-        main_pane.add(left, weight=30)
-        main_pane.add(center, weight=50)
-        main_pane.add(right, weight=20)
+        self.left_panel = ttk.Frame(self.main_pane, style="Card.TFrame", padding=14)
+        self.center_panel = ttk.Frame(self.main_pane, style="Card.TFrame", padding=14)
+        self.right_panel = ttk.Frame(self.main_pane, style="Card.TFrame", padding=14)
+        self.main_pane.add(self.left_panel, weight=LEFT_PANEL_WEIGHT)
+        self.main_pane.add(self.center_panel, weight=CENTER_PANEL_WEIGHT)
+        self.main_pane.add(self.right_panel, weight=RIGHT_PANEL_WEIGHT)
 
-        self._build_left_panel(left)
-        self._build_center_panel(center)
-        self._build_right_panel(right)
+        self._build_left_panel(self.left_panel)
+        self._build_center_panel(self.center_panel)
+        self._build_right_panel(self.right_panel)
 
     def _build_left_panel(self, parent: ttk.Frame) -> None:
         model_box = ttk.LabelFrame(parent, text="模型包管理", padding=12)
@@ -229,17 +248,34 @@ class FertilizerApp(tk.Tk):
 
     def _build_center_panel(self, parent: ttk.Frame) -> None:
         parent.columnconfigure(0, weight=1)
+        parent.columnconfigure(1, weight=0)
+        parent.columnconfigure(2, weight=0)
         parent.rowconfigure(2, weight=1)
+
+        self.left_toggle_button = ttk.Button(
+            parent,
+            textvariable=self.left_toggle_text,
+            command=self._toggle_left_panel,
+            style="Secondary.TButton",
+        )
+        self.left_toggle_button.grid(row=0, column=1, sticky="e", padx=(8, 0))
+        self.right_toggle_button = ttk.Button(
+            parent,
+            textvariable=self.right_toggle_text,
+            command=self._toggle_right_panel,
+            style="Secondary.TButton",
+        )
+        self.right_toggle_button.grid(row=0, column=2, sticky="e", padx=(8, 0))
 
         ttk.Label(parent, text="处方热力图与机具轨迹", style="Section.TLabel").grid(row=0, column=0, sticky="w")
         ttk.Label(
             parent,
             text="统一使用 Matplotlib 三视图预览，保持界面预览与导出图像的一致性。",
             style="Hint.TLabel",
-        ).grid(row=1, column=0, sticky="w", pady=(2, 8))
+        ).grid(row=1, column=0, columnspan=3, sticky="w", pady=(2, 8))
 
         self.preview_notebook = ttk.Notebook(parent)
-        self.preview_notebook.grid(row=2, column=0, sticky="nsew")
+        self.preview_notebook.grid(row=2, column=0, columnspan=3, sticky="nsew")
         self.preview_notebook.bind("<<NotebookTabChanged>>", self._on_preview_tab_changed)
 
         for key, title in self.PREVIEW_TITLES.items():
@@ -268,7 +304,7 @@ class FertilizerApp(tk.Tk):
             self.preview_tab_ids[key] = tab_id
 
         slider_frame = ttk.Frame(parent, style="Card.TFrame")
-        slider_frame.grid(row=3, column=0, sticky="ew", pady=(10, 0))
+        slider_frame.grid(row=3, column=0, columnspan=3, sticky="ew", pady=(10, 0))
         slider_frame.columnconfigure(0, weight=1)
         tk.Label(slider_frame, text="时间步", bg=SURFACE_BG, fg=TEXT_PRIMARY, font=("Microsoft YaHei UI", 10)).grid(
             row=0,
@@ -371,6 +407,110 @@ class FertilizerApp(tk.Tk):
         self.decision_table.configure(yscrollcommand=y_scroll.set)
         self.decision_table.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         y_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+
+    def _refresh_panel_toggle_texts(self) -> None:
+        self.left_toggle_text.set("展开左栏" if self.left_collapsed else "收起左栏")
+        self.right_toggle_text.set("展开右栏" if self.right_collapsed else "收起右栏")
+
+    def _remember_visible_panel_widths(self) -> None:
+        if self.main_pane is None:
+            return
+
+        self.update_idletasks()
+        pane_names = tuple(self.main_pane.panes())
+        total_width = self.main_pane.winfo_width()
+        if self.left_panel is not None and not self.left_collapsed:
+            left_width = self.left_panel.winfo_width()
+            if left_width <= 1 and len(pane_names) >= 2:
+                left_width = self.main_pane.sashpos(0)
+            if left_width > 1:
+                self.saved_left_width = int(left_width)
+        if self.right_panel is not None and not self.right_collapsed:
+            right_width = self.right_panel.winfo_width()
+            if right_width <= 1 and len(pane_names) >= 2:
+                if not self.left_collapsed and len(pane_names) >= 3:
+                    right_width = total_width - self.main_pane.sashpos(1)
+                else:
+                    right_width = total_width - self.main_pane.sashpos(0)
+            if right_width > 1:
+                self.saved_right_width = int(right_width)
+
+    def _default_panel_width(self, side: str) -> int:
+        total_width = self.main_pane.winfo_width() if self.main_pane is not None else 1800
+        ratio = 0.30 if side == "left" else 0.20
+        return max(int(total_width * ratio), MIN_SIDE_PANEL_WIDTH)
+
+    def _target_panel_width(self, side: str) -> int:
+        if side == "left":
+            saved_width = self.saved_left_width
+        else:
+            saved_width = self.saved_right_width
+        if saved_width is not None and saved_width > 1:
+            return saved_width
+        return self._default_panel_width(side)
+
+    def _clamp_side_panel_width(self, target_width: int, total_width: int, reserved_other: int = 0) -> int:
+        max_width = total_width - MIN_CENTER_PANEL_WIDTH - reserved_other
+        if max_width < MIN_SIDE_PANEL_WIDTH:
+            max_width = max(MIN_SIDE_PANEL_WIDTH, total_width // 2)
+        return max(MIN_SIDE_PANEL_WIDTH, min(int(target_width), max_width))
+
+    def _restore_side_panel_widths(self) -> None:
+        if self.main_pane is None:
+            return
+
+        self.update_idletasks()
+        total_width = self.main_pane.winfo_width()
+        if total_width <= 1:
+            return
+
+        sash_positions: list[tuple[int, int]] = []
+        if not self.left_collapsed and not self.right_collapsed:
+            left_target = self._clamp_side_panel_width(self._target_panel_width("left"), total_width, MIN_SIDE_PANEL_WIDTH)
+            right_target = self._clamp_side_panel_width(self._target_panel_width("right"), total_width, left_target)
+            sash_positions = [(0, left_target), (1, total_width - right_target)]
+        elif not self.left_collapsed:
+            left_target = self._clamp_side_panel_width(self._target_panel_width("left"), total_width)
+            sash_positions = [(0, left_target)]
+        elif not self.right_collapsed:
+            right_target = self._clamp_side_panel_width(self._target_panel_width("right"), total_width)
+            sash_positions = [(0, total_width - right_target)]
+
+        for index, position in sash_positions:
+            self.main_pane.sashpos(index, position)
+
+        if sash_positions:
+            self.update_idletasks()
+            for index, position in sash_positions:
+                self.main_pane.sashpos(index, position)
+
+    def _toggle_left_panel(self) -> None:
+        if self.main_pane is None or self.left_panel is None:
+            return
+
+        if self.left_collapsed:
+            self.main_pane.insert(0, self.left_panel, weight=LEFT_PANEL_WEIGHT)
+            self.left_collapsed = False
+            self.after_idle(self._restore_side_panel_widths)
+        else:
+            self._remember_visible_panel_widths()
+            self.main_pane.forget(self.left_panel)
+            self.left_collapsed = True
+        self._refresh_panel_toggle_texts()
+
+    def _toggle_right_panel(self) -> None:
+        if self.main_pane is None or self.right_panel is None:
+            return
+
+        if self.right_collapsed:
+            self.main_pane.add(self.right_panel, weight=RIGHT_PANEL_WEIGHT)
+            self.right_collapsed = False
+            self.after_idle(self._restore_side_panel_widths)
+        else:
+            self._remember_visible_panel_widths()
+            self.main_pane.forget(self.right_panel)
+            self.right_collapsed = True
+        self._refresh_panel_toggle_texts()
 
     def _add_labeled_entry(self, parent: ttk.Frame, label: str, variable: tk.StringVar, note: str | None = None) -> None:
         row = ttk.Frame(parent, style="Card.TFrame")
