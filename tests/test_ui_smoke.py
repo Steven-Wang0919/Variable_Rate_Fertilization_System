@@ -174,6 +174,29 @@ def pane_names(app: FertilizerApp) -> tuple[str, ...]:
     return tuple(app.main_pane.panes())
 
 
+def expected_decision_table_rows(frame: SimulationFrame) -> list[tuple[str, ...]]:
+    return [
+        (
+            str(decision.row_index),
+            decision.zone_id or "-",
+            f"{decision.target_rate_kg_ha:.1f}",
+            f"{decision.target_mass_g_min:.1f}",
+            f"{decision.strategy_opening_mm:.1f}",
+            f"{decision.target_speed_r_min:.2f}",
+            decision.selected_model,
+            decision.status,
+        )
+        for decision in frame.row_decisions
+    ]
+
+
+def decision_table_rows(app: FertilizerApp) -> list[tuple[str, ...]]:
+    return [
+        tuple(str(value) for value in app.decision_table.item(item_id, "values"))
+        for item_id in app.decision_table.get_children()
+    ]
+
+
 class UISmokeTests(unittest.TestCase):
     def create_app(self) -> FertilizerApp:
         try:
@@ -356,6 +379,7 @@ class UISmokeTests(unittest.TestCase):
 
         self.assertEqual(app.current_frame_index, 0)
         self.assertEqual(len(app.decision_table.get_children()), 2)
+        self.assertEqual(decision_table_rows(app), expected_decision_table_rows(result.frames[0]))
         self.assertEqual(sorted(app.preview_canvases.keys()), ["current", "legend", "overview"])
         self.assertEqual(
             visible_annotation_texts(overview_renderer.annotation_artists),
@@ -370,8 +394,9 @@ class UISmokeTests(unittest.TestCase):
 
         self.assertEqual(app.current_frame_index, 1)
         self.assertIn("500 ms", app.frame_info_var.get())
-        self.assertEqual(len(app.decision_table.get_children()), len(result.frames[0].row_decisions))
-        self.assertTrue(app._table_dirty)
+        self.assertEqual(decision_table_rows(app), expected_decision_table_rows(result.frames[1]))
+        self.assertFalse(app._table_dirty)
+        self.assertEqual(app._table_frame_index, 1)
         self.assertIsNone(app._pending_live_frame_index)
         self.assertEqual(overview_renderer.rendered_frame_index, 1)
         self.assertEqual(
@@ -382,13 +407,80 @@ class UISmokeTests(unittest.TestCase):
         app._on_slider_released(None)  # type: ignore[arg-type]
         app.update_idletasks()
 
-        self.assertEqual(len(app.decision_table.get_children()), len(result.frames[1].row_decisions))
+        self.assertEqual(decision_table_rows(app), expected_decision_table_rows(result.frames[1]))
         self.assertFalse(app._table_dirty)
         self.assertEqual(app._table_frame_index, 1)
         self.assertEqual(sorted(app.preview_canvases.keys()), ["current", "legend", "overview"])
         self.assertIs(app.preview_canvases["overview"], overview_canvas)
         self.assertIs(app.preview_canvases["current"], current_canvas)
         self.assertIs(app.preview_renderers["overview"], overview_renderer)
+        app.destroy()
+
+    def test_slider_change_should_live_update_decision_table_on_legend_tab(self) -> None:
+        app = self.create_app()
+        prescription = build_sample_prescription_map()
+        result = build_sample_result()
+
+        app.controller.prescription_map = prescription
+        app.controller.last_result = result
+        app.frame_slider.configure(to=len(result.frames) - 1)
+        app._set_result_state(has_result=True)
+        app._refresh_summary()
+        app._refresh_current_frame_details(refresh_table=True)
+        app._render_preview_tabs(force=True)
+        app.update_idletasks()
+
+        app.preview_notebook.select(app.preview_tab_ids["legend"])
+        app._on_preview_tab_changed(None)
+        app.update_idletasks()
+
+        overview_renderer = app.preview_renderers["overview"]
+        current_renderer = app.preview_renderers["current"]
+
+        app.frame_slider.set(1)
+        app._on_slider_changed("1")
+        app._cancel_live_preview_update()
+        app._process_live_preview_update()
+        app.update_idletasks()
+
+        self.assertEqual(app.current_frame_index, 1)
+        self.assertIn("500 ms", app.frame_info_var.get())
+        self.assertEqual(decision_table_rows(app), expected_decision_table_rows(result.frames[1]))
+        self.assertFalse(app._table_dirty)
+        self.assertEqual(app._table_frame_index, 1)
+        self.assertIsNone(app._pending_live_frame_index)
+        self.assertEqual(overview_renderer.rendered_frame_index, 0)
+        self.assertEqual(current_renderer.rendered_frame_index, 0)
+        app.destroy()
+
+    def test_live_update_should_apply_latest_pending_frame_for_decision_table(self) -> None:
+        app = self.create_app()
+        prescription = build_sample_prescription_map()
+        result = build_sample_result()
+
+        app.controller.prescription_map = prescription
+        app.controller.last_result = result
+        app.frame_slider.configure(to=len(result.frames) - 1)
+        app._set_result_state(has_result=True)
+        app._refresh_summary()
+        app._refresh_current_frame_details(refresh_table=True)
+        app._render_preview_tabs(force=True)
+        app.update_idletasks()
+
+        app.frame_slider.set(1)
+        app._on_slider_changed("1")
+        app.frame_slider.set(0)
+        app._on_slider_changed("0")
+        app._cancel_live_preview_update()
+        app._process_live_preview_update()
+        app.update_idletasks()
+
+        self.assertEqual(app.current_frame_index, 0)
+        self.assertEqual(decision_table_rows(app), expected_decision_table_rows(result.frames[0]))
+        self.assertFalse(app._table_dirty)
+        self.assertEqual(app._table_frame_index, 0)
+        self.assertIsNone(app._pending_live_frame_index)
+        self.assertEqual(app.preview_renderers["overview"].rendered_frame_index, 0)
         app.destroy()
 
     def test_collapsed_side_panels_should_not_break_preview_updates(self) -> None:

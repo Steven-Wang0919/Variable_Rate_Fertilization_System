@@ -892,21 +892,33 @@ class FertilizerApp(tk.Tk):
     def _refresh_current_frame_details(self, refresh_table: bool = True) -> None:
         result = self.controller.last_result
         if result is None or not result.frames:
-            self.frame_info_var.set("当前还没有仿真结果。")
-            if refresh_table:
-                self._clear_decision_table()
-                self._table_dirty = False
-                self._table_frame_index = None
+            self._clear_current_frame_details(refresh_table=refresh_table)
             return
 
         self.current_frame_index = self._normalized_slider_index(self.current_frame_index)
         frame = result.frames[self.current_frame_index]
+        self._refresh_frame_info(frame)
+
+        if not refresh_table:
+            return
+
+        self._refresh_decision_table(frame)
+
+    def _clear_current_frame_details(self, refresh_table: bool = True) -> None:
+        self.frame_info_var.set("当前还没有仿真结果。")
+        if refresh_table:
+            self._clear_decision_table()
+            self._table_dirty = False
+            self._table_frame_index = None
+
+    def _refresh_frame_info(self, frame) -> None:
         self.frame_info_var.set(
             f"时间戳：{frame.timestamp_ms} ms，作业趟次：第 {frame.pass_id} 趟，"
             f"机具中心：({frame.machine_center_x_m:.2f}, {frame.machine_center_y_m:.2f}) m"
         )
 
-        if not refresh_table:
+    def _refresh_decision_table(self, frame) -> None:
+        if not self._table_dirty and self._table_frame_index == self.current_frame_index:
             return
 
         self._clear_decision_table()
@@ -951,10 +963,7 @@ class FertilizerApp(tk.Tk):
         self._table_dirty = True
         self._refresh_current_frame_details(refresh_table=False)
         self._mark_previews_dirty(self.INTERACTIVE_PREVIEW_KEYS)
-
-        selected = self._selected_preview_key()
-        if selected in self.INTERACTIVE_PREVIEW_KEYS:
-            self._schedule_live_preview_update(selected)
+        self._schedule_live_preview_update(self._selected_preview_key())
 
     def _on_slider_released(self, _event) -> None:
         result = self.controller.last_result
@@ -1011,8 +1020,6 @@ class FertilizerApp(tk.Tk):
         self.preview_dirty_keys.update(keys)
 
     def _schedule_live_preview_update(self, preview_key: str) -> None:
-        if preview_key not in self.INTERACTIVE_PREVIEW_KEYS:
-            return
         self._live_preview_key = preview_key
         if self._live_preview_after_id is None:
             self._live_preview_after_id = self.after(self.LIVE_PREVIEW_INTERVAL_MS, self._process_live_preview_update)
@@ -1032,15 +1039,18 @@ class FertilizerApp(tk.Tk):
     def _process_live_preview_update(self) -> None:
         self._live_preview_after_id = None
         result = self.controller.last_result
-        preview_key = self._selected_preview_key()
         pending_index = self._pending_live_frame_index
-        if result is None or not result.frames or pending_index is None or preview_key not in self.INTERACTIVE_PREVIEW_KEYS:
+        if result is None or not result.frames or pending_index is None:
             return
 
+        self.current_frame_index = self._normalized_slider_index(pending_index)
         self._pending_live_frame_index = None
+        self._refresh_current_frame_details(refresh_table=True)
+
+        preview_key = self._selected_preview_key()
         if preview_key == "overview":
             self._render_simulation_preview("overview", detailed=False, immediate=False)
-        else:
+        elif preview_key == "current":
             self._render_simulation_preview("current", detailed=False, immediate=False)
 
         if self._pending_live_frame_index is not None:
@@ -1162,7 +1172,7 @@ class FertilizerApp(tk.Tk):
             elif selected == "overview":
                 self._render_simulation_preview("overview", detailed=False, immediate=True)
 
-        if self._pending_live_frame_index is not None and selected in self.INTERACTIVE_PREVIEW_KEYS:
+        if self._pending_live_frame_index is not None:
             self._schedule_live_preview_update(selected)
 
     def _show_preview_placeholder(self, preview_key: str, message: str) -> None:
