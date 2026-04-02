@@ -3,10 +3,16 @@ from __future__ import annotations
 import os
 import tkinter as tk
 from pathlib import Path
-from tkinter import font as tkfont
 from tkinter import filedialog, messagebox, scrolledtext, ttk
 
-from .annotations import format_row_annotation
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+
+try:
+    import sv_ttk
+except ImportError:  # pragma: no cover - optional dependency fallback
+    sv_ttk = None
+
 from .controller import SimulationController
 from .defaults import (
     DEFAULT_KAN_ARTIFACT_DIR,
@@ -14,25 +20,49 @@ from .defaults import (
     DEFAULT_OUTPUT_ROOT,
     DEFAULT_SAMPLE_PRESCRIPTION,
 )
-from .domain import Bounds, MachineConfig
+from .domain import MachineConfig
+from .visualization import (
+    CurrentFramePreviewState,
+    OverviewPreviewState,
+    create_current_preview_state,
+    create_legend_figure,
+    create_overview_preview_state,
+    create_prescription_legend_figure,
+    create_prescription_overview_figure,
+)
 
 
-KAN_COLOR = "#059669"
-MLP_COLOR = "#d97706"
-OUT_COLOR = "#6b7280"
-PATH_COLOR = "#2563eb"
-CENTER_COLOR = "#111827"
+APP_BG = "#eef3f9"
+SURFACE_BG = "#ffffff"
+BORDER_COLOR = "#d6dee8"
+TEXT_PRIMARY = "#0f172a"
+TEXT_MUTED = "#64748b"
+TEXT_SOFT = "#94a3b8"
+PRIMARY_COLOR = "#0f766e"
+PRIMARY_COLOR_ACTIVE = "#115e59"
+ACCENT_COLOR = "#0ea5a4"
+SLIDER_TROUGH_ACTIVE = "#99f6e4"
+SLIDER_TROUGH_DISABLED = "#dbe4ee"
+SLIDER_HANDLE_ACTIVE = "#0f766e"
+SLIDER_HANDLE_DISABLED = "#94a3b8"
 
 
 class FertilizerApp(tk.Tk):
+    PREVIEW_TITLES = {
+        "overview": "总览图",
+        "current": "当前帧细节图",
+        "legend": "图例",
+    }
+    INTERACTIVE_PREVIEW_KEYS = ("overview", "current")
+    LIVE_PREVIEW_INTERVAL_MS = 16
+
     def __init__(self, auto_load_models: bool = True) -> None:
         super().__init__()
         self.title("玉米精量播种机变量施肥决策系统")
-        self.geometry("1600x900")
-        self.minsize(1360, 780)
+        self.geometry("1800x1040")
+        self.minsize(1480, 860)
+        self.configure(bg=APP_BG)
         self.option_add("*Font", ("Microsoft YaHei UI", 10))
-        self.row_annotation_font = ("Microsoft YaHei UI", 8)
-        self.pass_label_font = ("Microsoft YaHei UI", 8, "bold")
 
         self.controller = SimulationController()
         self.current_frame_index = 0
@@ -51,49 +81,110 @@ class FertilizerApp(tk.Tk):
         self.frame_info_var = tk.StringVar(value="当前还没有仿真结果。")
         self.summary_var = tk.StringVar(value="请先加载模型并导入处方图。")
 
+        self.preview_frames: dict[str, ttk.Frame] = {}
+        self.preview_hosts: dict[str, ttk.Frame] = {}
+        self.preview_placeholders: dict[str, tk.Label] = {}
+        self.preview_status_vars: dict[str, tk.StringVar] = {}
+        self.preview_canvases: dict[str, FigureCanvasTkAgg] = {}
+        self.preview_figures: dict[str, object] = {}
+        self.preview_renderers: dict[str, OverviewPreviewState | CurrentFramePreviewState] = {}
+        self.preview_tab_keys: dict[str, str] = {}
+        self.preview_tab_ids: dict[str, str] = {}
+        self.preview_dirty_keys: set[str] = set(self.PREVIEW_TITLES)
+
+        self._preview_result_token: int | None = None
+        self._slider_events_suspended = False
+        self._live_preview_after_id: str | None = None
+        self._pending_live_frame_index: int | None = None
+        self._live_preview_key: str | None = None
+        self._table_dirty = False
+        self._table_frame_index: int | None = None
+
+        self._configure_styles()
         self._build_layout()
-        self.canvas.bind("<Configure>", lambda _event: self._redraw_map())
-        self.legend_canvas.bind("<Configure>", lambda _event: self._redraw_legend())
+        self._set_result_state(has_result=False)
+        self._render_preview_tabs(force=True)
 
         if auto_load_models:
             self._load_default_models(show_message=False)
 
+    def _configure_styles(self) -> None:
+        if sv_ttk is not None:
+            try:
+                sv_ttk.set_theme("light")
+            except Exception:
+                pass
+
+        style = ttk.Style(self)
+        style.configure(".", font=("Microsoft YaHei UI", 10))
+        style.configure("TLabelframe", background=SURFACE_BG, borderwidth=1)
+        style.configure("TLabelframe.Label", background=SURFACE_BG, foreground=TEXT_PRIMARY, font=("Microsoft YaHei UI", 10, "bold"))
+        style.configure("TFrame", background=APP_BG)
+        style.configure("Card.TFrame", background=SURFACE_BG)
+        style.configure("Section.TLabel", background=APP_BG, foreground=TEXT_PRIMARY, font=("Microsoft YaHei UI", 12, "bold"))
+        style.configure("Hint.TLabel", background=APP_BG, foreground=TEXT_MUTED)
+        style.configure("Note.TLabel", background=SURFACE_BG, foreground=TEXT_SOFT)
+        style.configure("Primary.TButton", padding=(10, 8))
+        style.configure("Secondary.TButton", padding=(10, 8))
+        style.configure("Treeview", rowheight=28)
+        style.configure("Treeview.Heading", font=("Microsoft YaHei UI", 9, "bold"))
+
     def _build_layout(self) -> None:
         main_pane = ttk.PanedWindow(self, orient=tk.HORIZONTAL)
-        main_pane.pack(fill=tk.BOTH, expand=True)
+        main_pane.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
 
-        left = ttk.Frame(main_pane, padding=12)
-        center = ttk.Frame(main_pane, padding=12)
-        right = ttk.Frame(main_pane, padding=12)
-        main_pane.add(left, weight=28)
-        main_pane.add(center, weight=42)
-        main_pane.add(right, weight=30)
+        left = ttk.Frame(main_pane, style="Card.TFrame", padding=14)
+        center = ttk.Frame(main_pane, style="Card.TFrame", padding=14)
+        right = ttk.Frame(main_pane, style="Card.TFrame", padding=14)
+        main_pane.add(left, weight=30)
+        main_pane.add(center, weight=50)
+        main_pane.add(right, weight=20)
 
         self._build_left_panel(left)
         self._build_center_panel(center)
         self._build_right_panel(right)
 
     def _build_left_panel(self, parent: ttk.Frame) -> None:
-        model_box = ttk.LabelFrame(parent, text="模型包管理", padding=10)
-        model_box.pack(fill=tk.X, pady=(0, 10))
+        model_box = ttk.LabelFrame(parent, text="模型包管理", padding=12)
+        model_box.pack(fill=tk.X, pady=(0, 12))
         ttk.Label(model_box, text="KAN 模型目录").pack(anchor=tk.W)
-        ttk.Entry(model_box, textvariable=self.kan_dir_var).pack(fill=tk.X, pady=(2, 6))
-        ttk.Button(model_box, text="选择 KAN 目录", command=self._choose_kan_dir).pack(fill=tk.X)
-        ttk.Label(model_box, text="MLP 模型目录").pack(anchor=tk.W, pady=(8, 0))
-        ttk.Entry(model_box, textvariable=self.mlp_dir_var).pack(fill=tk.X, pady=(2, 6))
-        ttk.Button(model_box, text="选择 MLP 目录", command=self._choose_mlp_dir).pack(fill=tk.X)
-        ttk.Button(model_box, text="按当前目录加载模型", command=self._load_models_from_current_inputs).pack(fill=tk.X, pady=(8, 0))
-        ttk.Button(model_box, text="恢复默认模型目录", command=self._load_default_models).pack(fill=tk.X, pady=(6, 0))
+        ttk.Entry(model_box, textvariable=self.kan_dir_var).pack(fill=tk.X, pady=(4, 8))
+        ttk.Button(model_box, text="选择 KAN 目录", command=self._choose_kan_dir, style="Secondary.TButton").pack(fill=tk.X)
+        ttk.Label(model_box, text="MLP 模型目录").pack(anchor=tk.W, pady=(12, 0))
+        ttk.Entry(model_box, textvariable=self.mlp_dir_var).pack(fill=tk.X, pady=(4, 8))
+        ttk.Button(model_box, text="选择 MLP 目录", command=self._choose_mlp_dir, style="Secondary.TButton").pack(fill=tk.X)
+        ttk.Button(
+            model_box,
+            text="按当前目录加载模型",
+            command=self._load_models_from_current_inputs,
+            style="Secondary.TButton",
+        ).pack(fill=tk.X, pady=(10, 0))
+        ttk.Button(
+            model_box,
+            text="恢复默认模型目录",
+            command=self._load_default_models,
+            style="Secondary.TButton",
+        ).pack(fill=tk.X, pady=(8, 0))
 
-        prescription_box = ttk.LabelFrame(parent, text="处方图", padding=10)
-        prescription_box.pack(fill=tk.X, pady=(0, 10))
+        prescription_box = ttk.LabelFrame(parent, text="处方图", padding=12)
+        prescription_box.pack(fill=tk.X, pady=(0, 12))
         ttk.Label(prescription_box, text="处方图 CSV 路径").pack(anchor=tk.W)
-        ttk.Entry(prescription_box, textvariable=self.prescription_path_var).pack(fill=tk.X, pady=(2, 6))
-        ttk.Button(prescription_box, text="导入处方图 CSV", command=self._choose_prescription_csv).pack(fill=tk.X)
-        ttk.Button(prescription_box, text="加载示例处方图", command=self._load_sample_prescription).pack(fill=tk.X, pady=(6, 0))
+        ttk.Entry(prescription_box, textvariable=self.prescription_path_var).pack(fill=tk.X, pady=(4, 8))
+        ttk.Button(
+            prescription_box,
+            text="导入处方图 CSV",
+            command=self._choose_prescription_csv,
+            style="Secondary.TButton",
+        ).pack(fill=tk.X)
+        ttk.Button(
+            prescription_box,
+            text="加载示例处方图",
+            command=self._load_sample_prescription,
+            style="Secondary.TButton",
+        ).pack(fill=tk.X, pady=(8, 0))
 
-        machine_box = ttk.LabelFrame(parent, text="机器参数", padding=10)
-        machine_box.pack(fill=tk.X, pady=(0, 10))
+        machine_box = ttk.LabelFrame(parent, text="机器参数", padding=12)
+        machine_box.pack(fill=tk.X, pady=(0, 12))
         self._add_labeled_entry(machine_box, "行数", self.row_count_var)
         self._add_labeled_entry(machine_box, "行距 (m)", self.row_spacing_var)
         self._add_labeled_entry(machine_box, "作业速度 (km/h)", self.travel_speed_var)
@@ -105,95 +196,191 @@ class FertilizerApp(tk.Tk):
             self.row_offsets_var,
             note="留空则自动按行距居中生成，例如：-1.5,-0.9,-0.3,0.3,0.9,1.5",
         )
-        ttk.Button(machine_box, text="恢复默认机器参数", command=self._reset_machine_defaults).pack(fill=tk.X, pady=(8, 0))
-        ttk.Button(machine_box, text="运行仿真", command=self._run_simulation).pack(fill=tk.X, pady=(6, 0))
+        ttk.Button(
+            machine_box,
+            text="恢复默认机器参数",
+            command=self._reset_machine_defaults,
+            style="Secondary.TButton",
+        ).pack(fill=tk.X, pady=(10, 0))
+        self.run_button = ttk.Button(
+            machine_box,
+            text="运行仿真",
+            command=self._run_simulation,
+            style="Primary.TButton",
+        )
+        self.run_button.pack(fill=tk.X, pady=(8, 0))
 
-        export_box = ttk.LabelFrame(parent, text="导出设置", padding=10)
-        export_box.pack(fill=tk.X, pady=(0, 10))
+        export_box = ttk.LabelFrame(parent, text="导出设置", padding=12)
+        export_box.pack(fill=tk.X, pady=(0, 12))
         ttk.Label(export_box, text="导出根目录").pack(anchor=tk.W)
-        ttk.Entry(export_box, textvariable=self.output_root_var).pack(fill=tk.X, pady=(2, 6))
-        ttk.Button(export_box, text="选择导出目录", command=self._choose_output_root).pack(fill=tk.X)
+        ttk.Entry(export_box, textvariable=self.output_root_var).pack(fill=tk.X, pady=(4, 8))
+        ttk.Button(
+            export_box,
+            text="选择导出目录",
+            command=self._choose_output_root,
+            style="Secondary.TButton",
+        ).pack(fill=tk.X)
 
-        log_box = ttk.LabelFrame(parent, text="运行日志", padding=10)
+        log_box = ttk.LabelFrame(parent, text="运行日志", padding=12)
         log_box.pack(fill=tk.BOTH, expand=True)
-        self.log_text = scrolledtext.ScrolledText(log_box, height=18, wrap=tk.WORD)
+        self.log_text = scrolledtext.ScrolledText(log_box, height=12, wrap=tk.WORD, borderwidth=0, relief=tk.FLAT)
         self.log_text.pack(fill=tk.BOTH, expand=True)
         self.log_text.configure(state=tk.DISABLED)
 
     def _build_center_panel(self, parent: ttk.Frame) -> None:
-        ttk.Label(parent, text="处方热力图与机具轨迹", font=("Microsoft YaHei UI", 12, "bold")).pack(anchor=tk.W)
+        parent.columnconfigure(0, weight=1)
+        parent.rowconfigure(2, weight=1)
+
+        ttk.Label(parent, text="处方热力图与机具轨迹", style="Section.TLabel").grid(row=0, column=0, sticky="w")
         ttk.Label(
             parent,
-            text="地图区已拆分为绘图区和独立图例区，用于避免轨迹、排号和图例互相干涉。",
-            foreground="#64748b",
-        ).pack(anchor=tk.W, pady=(2, 8))
+            text="统一使用 Matplotlib 三视图预览，保持界面预览与导出图像的一致性。",
+            style="Hint.TLabel",
+        ).grid(row=1, column=0, sticky="w", pady=(2, 8))
 
-        map_frame = ttk.Frame(parent)
-        map_frame.pack(fill=tk.BOTH, expand=True)
-        self.canvas = tk.Canvas(map_frame, background="#f8fafc", highlightthickness=1, highlightbackground="#d1d5db")
-        self.canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        self.legend_canvas = tk.Canvas(
-            map_frame,
-            width=220,
-            background="#ffffff",
-            highlightthickness=1,
-            highlightbackground="#d1d5db",
+        self.preview_notebook = ttk.Notebook(parent)
+        self.preview_notebook.grid(row=2, column=0, sticky="nsew")
+        self.preview_notebook.bind("<<NotebookTabChanged>>", self._on_preview_tab_changed)
+
+        for key, title in self.PREVIEW_TITLES.items():
+            preview_frame = ttk.Frame(self.preview_notebook, style="Card.TFrame", padding=6)
+            preview_frame.pack_propagate(False)
+            status_var = tk.StringVar(value="")
+            host = ttk.Frame(preview_frame, style="Card.TFrame")
+            placeholder = tk.Label(
+                preview_frame,
+                textvariable=status_var,
+                justify=tk.CENTER,
+                anchor="center",
+                fg=TEXT_MUTED,
+                bg=SURFACE_BG,
+                font=("Microsoft YaHei UI", 12),
+            )
+            placeholder.pack(fill=tk.BOTH, expand=True)
+
+            self.preview_notebook.add(preview_frame, text=title)
+            tab_id = self.preview_notebook.tabs()[-1]
+            self.preview_frames[key] = preview_frame
+            self.preview_hosts[key] = host
+            self.preview_placeholders[key] = placeholder
+            self.preview_status_vars[key] = status_var
+            self.preview_tab_keys[tab_id] = key
+            self.preview_tab_ids[key] = tab_id
+
+        slider_frame = ttk.Frame(parent, style="Card.TFrame")
+        slider_frame.grid(row=3, column=0, sticky="ew", pady=(10, 0))
+        slider_frame.columnconfigure(0, weight=1)
+        tk.Label(slider_frame, text="时间步", bg=SURFACE_BG, fg=TEXT_PRIMARY, font=("Microsoft YaHei UI", 10)).grid(
+            row=0,
+            column=0,
+            sticky="w",
         )
-        self.legend_canvas.pack(side=tk.RIGHT, fill=tk.Y, padx=(8, 0))
-
-        slider_frame = ttk.Frame(parent)
-        slider_frame.pack(fill=tk.X, pady=(8, 0))
-        ttk.Label(slider_frame, text="时间步").pack(anchor=tk.W)
-        self.frame_slider = ttk.Scale(
+        self.frame_slider = tk.Scale(
             slider_frame,
             from_=0,
             to=0,
             orient=tk.HORIZONTAL,
+            showvalue=False,
             command=self._on_slider_changed,
+            width=24,
+            sliderlength=36,
+            borderwidth=0,
+            highlightthickness=0,
+            relief=tk.FLAT,
+            bg=SURFACE_BG,
+            fg=TEXT_PRIMARY,
+            activebackground=SLIDER_HANDLE_DISABLED,
+            troughcolor=SLIDER_TROUGH_DISABLED,
         )
-        self.frame_slider.pack(fill=tk.X, pady=(4, 6))
-        ttk.Label(slider_frame, textvariable=self.frame_info_var, wraplength=760).pack(anchor=tk.W)
+        self.frame_slider.grid(row=1, column=0, sticky="ew", pady=(6, 8))
+        self.frame_slider.bind("<ButtonRelease-1>", self._on_slider_released)
+        self.frame_slider.bind("<KeyRelease>", self._on_slider_released)
+        tk.Label(
+            slider_frame,
+            textvariable=self.frame_info_var,
+            wraplength=920,
+            bg=SURFACE_BG,
+            fg=TEXT_PRIMARY,
+            font=("Microsoft YaHei UI", 10),
+        ).grid(row=2, column=0, sticky="w")
 
     def _build_right_panel(self, parent: ttk.Frame) -> None:
-        summary_box = ttk.LabelFrame(parent, text="仿真摘要", padding=10)
-        summary_box.pack(fill=tk.X, pady=(0, 10))
-        ttk.Label(summary_box, textvariable=self.summary_var, wraplength=420, justify=tk.LEFT).pack(anchor=tk.W)
+        summary_box = ttk.LabelFrame(parent, text="仿真摘要", padding=12)
+        summary_box.pack(fill=tk.X, pady=(0, 12))
+        tk.Label(
+            summary_box,
+            textvariable=self.summary_var,
+            wraplength=320,
+            justify=tk.LEFT,
+            bg=SURFACE_BG,
+            fg=TEXT_PRIMARY,
+            font=("Microsoft YaHei UI", 10),
+        ).pack(anchor=tk.W)
 
-        actions = ttk.Frame(summary_box)
-        actions.pack(fill=tk.X, pady=(10, 0))
-        ttk.Button(actions, text="导出结果与地图", command=self._export_results).pack(side=tk.LEFT, padx=(0, 8))
-        ttk.Button(actions, text="打开导出目录", command=self._open_last_export_dir).pack(side=tk.LEFT)
+        actions = ttk.Frame(summary_box, style="Card.TFrame")
+        actions.pack(fill=tk.X, pady=(12, 0))
+        self.export_button = ttk.Button(
+            actions,
+            text="导出结果与地图",
+            command=self._export_results,
+            style="Primary.TButton",
+        )
+        self.export_button.pack(side=tk.LEFT, padx=(0, 8))
+        self.open_export_button = ttk.Button(
+            actions,
+            text="打开导出目录",
+            command=self._open_last_export_dir,
+            style="Secondary.TButton",
+        )
+        self.open_export_button.pack(side=tk.LEFT)
 
-        table_box = ttk.LabelFrame(parent, text="当前时刻单排决策", padding=10)
+        table_box = ttk.LabelFrame(parent, text="当前时刻单排行决策", padding=12)
         table_box.pack(fill=tk.BOTH, expand=True)
         columns = ("row", "zone", "rate", "mass", "opening", "speed", "model", "status")
-        self.decision_table = ttk.Treeview(table_box, columns=columns, show="headings", height=20)
+        self.decision_table = ttk.Treeview(table_box, columns=columns, show="headings", height=18)
         headings = {
-            "row": "排号",
+            "row": "行号",
             "zone": "分区",
-            "rate": "目标量(kg/ha)",
-            "mass": "目标排肥量(g/min)",
-            "opening": "开度(mm)",
-            "speed": "目标转速(r/min)",
+            "rate": "目标量 (kg/ha)",
+            "mass": "目标排肥量 (g/min)",
+            "opening": "开度 (mm)",
+            "speed": "目标转速 (r/min)",
             "model": "模型",
             "status": "状态",
         }
-        widths = {"row": 56, "zone": 72, "rate": 110, "mass": 126, "opening": 92, "speed": 112, "model": 108, "status": 110}
+        widths = {
+            "row": 56,
+            "zone": 74,
+            "rate": 116,
+            "mass": 138,
+            "opening": 96,
+            "speed": 122,
+            "model": 96,
+            "status": 108,
+        }
+        numeric_columns = {"rate", "mass", "opening", "speed"}
         for column in columns:
-            self.decision_table.heading(column, text=headings[column])
-            self.decision_table.column(column, width=widths[column], anchor=tk.CENTER)
+            anchor = tk.E if column in numeric_columns else tk.CENTER
+            self.decision_table.heading(column, text=headings[column], anchor=anchor)
+            self.decision_table.column(column, width=widths[column], anchor=anchor, stretch=column != "row")
+
+        self.decision_table.tag_configure("oddrow", background="#ffffff")
+        self.decision_table.tag_configure("evenrow", background="#f8fafc")
+
         y_scroll = ttk.Scrollbar(table_box, orient=tk.VERTICAL, command=self.decision_table.yview)
         self.decision_table.configure(yscrollcommand=y_scroll.set)
         self.decision_table.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         y_scroll.pack(side=tk.RIGHT, fill=tk.Y)
 
     def _add_labeled_entry(self, parent: ttk.Frame, label: str, variable: tk.StringVar, note: str | None = None) -> None:
-        row = ttk.Frame(parent)
-        row.pack(fill=tk.X, pady=2)
-        ttk.Label(row, text=label, width=14).pack(side=tk.LEFT)
+        row = ttk.Frame(parent, style="Card.TFrame")
+        row.pack(fill=tk.X, pady=(0, 8))
+        tk.Label(row, text=label, width=14, bg=SURFACE_BG, fg=TEXT_PRIMARY, font=("Microsoft YaHei UI", 10)).pack(
+            side=tk.LEFT
+        )
         ttk.Entry(row, textvariable=variable).pack(side=tk.LEFT, fill=tk.X, expand=True)
         if note:
-            ttk.Label(parent, text=note, foreground="#64748b", wraplength=280).pack(anchor=tk.W, padx=(2, 0), pady=(0, 2))
+            ttk.Label(parent, text=note, style="Note.TLabel", wraplength=300).pack(anchor=tk.W, pady=(0, 6))
 
     def _choose_kan_dir(self) -> None:
         path = filedialog.askdirectory(title="选择 inverse_KAN 模型目录", initialdir=self.kan_dir_var.get() or str(Path.cwd()))
@@ -227,10 +414,7 @@ class FertilizerApp(tk.Tk):
 
     def _load_models_from_current_inputs(self, show_message: bool = True) -> None:
         try:
-            kan_bundle, mlp_bundle = self.controller.load_models_from_dirs(
-                self.kan_dir_var.get(),
-                self.mlp_dir_var.get(),
-            )
+            kan_bundle, mlp_bundle = self.controller.load_models_from_dirs(self.kan_dir_var.get(), self.mlp_dir_var.get())
             self._log(f"已加载模型：{kan_bundle.config.name} 与 {mlp_bundle.config.name}")
             if show_message:
                 messagebox.showinfo("模型加载完成", "已成功加载 KAN 与 MLP 模型包。")
@@ -247,18 +431,14 @@ class FertilizerApp(tk.Tk):
         try:
             prescription = self.controller.load_prescription(path)
             self._log(f"已加载处方图：{prescription.source_path}")
-            self.summary_var.set("处方图已导入，可以直接运行仿真。")
-            self._redraw_map()
-            self._redraw_legend()
+            self._reset_result_views(summary_message="处方图已导入，运行仿真后即可查看三视图预览。")
         except Exception as exc:  # noqa: BLE001
             self._log(f"处方图导入失败：{exc}")
             messagebox.showerror("处方图导入失败", str(exc))
 
     def _parse_machine_config(self) -> MachineConfig:
         row_offsets_text = self.row_offsets_var.get().strip()
-        row_offsets = []
-        if row_offsets_text:
-            row_offsets = [float(item.strip()) for item in row_offsets_text.split(",") if item.strip()]
+        row_offsets = [float(item.strip()) for item in row_offsets_text.split(",") if item.strip()] if row_offsets_text else []
         return MachineConfig(
             row_count=int(self.row_count_var.get()),
             row_spacing_m=float(self.row_spacing_var.get()),
@@ -281,14 +461,26 @@ class FertilizerApp(tk.Tk):
         try:
             if self.controller.router is None:
                 self._load_models_from_current_inputs(show_message=False)
-            if self.controller.prescription_map is None and self.prescription_path_var.get():
-                self._load_prescription(self.prescription_path_var.get())
+            if self.controller.prescription_map is None:
+                if self.prescription_path_var.get():
+                    self._load_prescription(self.prescription_path_var.get())
+                if self.controller.prescription_map is None:
+                    raise ValueError("请先导入处方图。")
+
             result = self.controller.run_simulation(self._parse_machine_config())
             self.current_frame_index = 0
+            self.last_export_dir = None
+            self._preview_result_token = None
+            self._cancel_live_preview_update()
             self.frame_slider.configure(to=max(len(result.frames) - 1, 0))
-            self.frame_slider.set(0)
+            self._set_slider_value(0)
+            self._table_dirty = False
+            self._table_frame_index = None
+            self._set_result_state(has_result=True)
             self._refresh_summary()
-            self._refresh_current_frame()
+            self._refresh_current_frame_details(refresh_table=True)
+            self._initialize_simulation_previews(result)
+            self._render_preview_tabs(force=True)
             self._log("仿真完成。")
         except Exception as exc:  # noqa: BLE001
             self._log(f"仿真失败：{exc}")
@@ -299,6 +491,7 @@ class FertilizerApp(tk.Tk):
         if result is None:
             self.summary_var.set("当前没有仿真结果。")
             return
+
         summary = result.summary
         model_counts = summary.get("selected_model_counts", {})
         status_counts = summary.get("status_counts", {})
@@ -316,19 +509,29 @@ class FertilizerApp(tk.Tk):
             f"平均目标转速：{summary.get('average_target_speed_r_min', 0)} r/min"
         )
 
-    def _refresh_current_frame(self) -> None:
+    def _refresh_current_frame_details(self, refresh_table: bool = True) -> None:
         result = self.controller.last_result
         if result is None or not result.frames:
             self.frame_info_var.set("当前还没有仿真结果。")
+            if refresh_table:
+                self._clear_decision_table()
+                self._table_dirty = False
+                self._table_frame_index = None
             return
+
+        self.current_frame_index = self._normalized_slider_index(self.current_frame_index)
         frame = result.frames[self.current_frame_index]
         self.frame_info_var.set(
             f"时间戳：{frame.timestamp_ms} ms，作业趟次：第 {frame.pass_id} 趟，"
             f"机具中心：({frame.machine_center_x_m:.2f}, {frame.machine_center_y_m:.2f}) m"
         )
-        for item in self.decision_table.get_children():
-            self.decision_table.delete(item)
-        for decision in frame.row_decisions:
+
+        if not refresh_table:
+            return
+
+        self._clear_decision_table()
+        for index, decision in enumerate(frame.row_decisions):
+            tag = "evenrow" if index % 2 else "oddrow"
             self.decision_table.insert(
                 "",
                 tk.END,
@@ -342,348 +545,327 @@ class FertilizerApp(tk.Tk):
                     decision.selected_model,
                     decision.status,
                 ),
+                tags=(tag,),
             )
-        self._redraw_map()
-        self._redraw_legend()
 
-    def _on_slider_changed(self, _value: str) -> None:
+        self._table_dirty = False
+        self._table_frame_index = self.current_frame_index
+
+    def _clear_decision_table(self) -> None:
+        for item in self.decision_table.get_children():
+            self.decision_table.delete(item)
+
+    def _on_slider_changed(self, value: str) -> None:
+        if self._slider_events_suspended:
+            return
         result = self.controller.last_result
         if result is None or not result.frames:
             return
-        index = int(round(float(self.frame_slider.get())))
-        index = max(0, min(index, len(result.frames) - 1))
+
+        index = self._normalized_slider_index(value)
+        if index == self.current_frame_index and self._pending_live_frame_index is None:
+            return
+
         self.current_frame_index = index
-        self._refresh_current_frame()
+        self._pending_live_frame_index = index
+        self._table_dirty = True
+        self._refresh_current_frame_details(refresh_table=False)
+        self._mark_previews_dirty(self.INTERACTIVE_PREVIEW_KEYS)
 
-    def _map_layout(self, width: int, height: int) -> dict[str, int]:
-        return {"left": 70, "right": 30, "top": 26, "bottom": 68}
+        selected = self._selected_preview_key()
+        if selected in self.INTERACTIVE_PREVIEW_KEYS:
+            self._schedule_live_preview_update(selected)
 
-    def _plot_area(self, width: int, height: int) -> tuple[int, int, int, int]:
-        layout = self._map_layout(width, height)
-        return (
-            layout["left"],
-            layout["top"],
-            width - layout["right"],
-            height - layout["bottom"],
-        )
-
-    def _rate_to_color(self, rate: float, min_rate: float, max_rate: float) -> str:
-        if max_rate <= min_rate:
-            normalized = 0.5
-        else:
-            normalized = (rate - min_rate) / (max_rate - min_rate)
-        normalized = max(0.0, min(normalized, 1.0))
-        red = int(24 + normalized * 210)
-        green = int(130 + (1.0 - normalized) * 80)
-        blue = int(190 - normalized * 120)
-        return f"#{red:02x}{green:02x}{blue:02x}"
-
-    def _transform_point(self, x: float, y: float, width: int, height: int) -> tuple[float, float]:
-        prescription = self.controller.prescription_map
-        if prescription is None:
-            return x, y
-        bounds = prescription.bounds
-        left, top, right, bottom = self._plot_area(width, height)
-        usable_width = max(right - left, 1)
-        usable_height = max(bottom - top, 1)
-        scale_x = usable_width / max(bounds.width, 1e-6)
-        scale_y = usable_height / max(bounds.height, 1e-6)
-        scale = min(scale_x, scale_y)
-        canvas_x = left + (x - bounds.min_x) * scale
-        canvas_y = bottom - (y - bounds.min_y) * scale
-        return canvas_x, canvas_y
-
-    def _draw_axes(self, width: int, height: int, bounds: Bounds) -> None:
-        left, top, right, bottom = self._plot_area(width, height)
-        self.canvas.create_rectangle(left, top, right, bottom, outline="#cbd5e1", width=1)
-        tick_count = 5
-        for index in range(tick_count + 1):
-            ratio = index / tick_count
-            x = left + (right - left) * ratio
-            y = bottom - (bottom - top) * ratio
-            self.canvas.create_line(x, bottom, x, bottom + 6, fill="#64748b")
-            self.canvas.create_line(left - 6, y, left, y, fill="#64748b")
-            x_value = bounds.min_x + bounds.width * ratio
-            y_value = bounds.min_y + bounds.height * ratio
-            self.canvas.create_text(x, bottom + 18, text=f"{x_value:.1f}", fill="#334155", font=("Microsoft YaHei UI", 9))
-            self.canvas.create_text(left - 28, y, text=f"{y_value:.1f}", fill="#334155", font=("Microsoft YaHei UI", 9))
-
-        self.canvas.create_text((left + right) / 2, height - 20, text="X 坐标 / m", fill="#0f172a", font=("Microsoft YaHei UI", 10, "bold"))
-        self.canvas.create_text(22, (top + bottom) / 2, text="Y\n坐\n标\n/\nm", fill="#0f172a", font=("Microsoft YaHei UI", 10, "bold"))
-
-    def _measure_text_block(self, text: str, font: tuple) -> tuple[int, int]:
-        font_obj = tkfont.Font(font=font)
-        lines = text.splitlines() or [text]
-        width = max(font_obj.measure(line) for line in lines)
-        height = font_obj.metrics("linespace") * len(lines)
-        return width, height
-
-    def _draw_text_with_bg(
-        self,
-        x: float,
-        y: float,
-        text: str,
-        *,
-        anchor: str,
-        fill: str,
-        font: tuple,
-        justify: str | None = None,
-    ) -> None:
-        options = {"text": text, "anchor": anchor, "fill": fill, "font": font}
-        if justify is not None:
-            options["justify"] = justify
-        text_id = self.canvas.create_text(x, y, **options)
-        bbox = self.canvas.bbox(text_id)
-        if bbox:
-            rect_id = self.canvas.create_rectangle(
-                bbox[0] - 2,
-                bbox[1] - 1,
-                bbox[2] + 2,
-                bbox[3] + 1,
-                fill="#f8fafc",
-                outline="",
-            )
-            self.canvas.tag_lower(rect_id, text_id)
-
-    def _draw_cell_label(self, cell, left: float, top: float, right: float, bottom: float) -> None:
-        if (right - left) < 54 or (bottom - top) < 30:
-            return
-        self.canvas.create_text(
-            (left + right) / 2,
-            (top + bottom) / 2,
-            text=f"{cell.zone_id}\n{cell.target_rate_kg_ha:.0f}",
-            fill="#0f172a",
-            font=("Microsoft YaHei UI", 8),
-        )
-
-    def _display_row_point(
-        self,
-        row_x: float,
-        row_y: float,
-        row_index: int,
-        width: int,
-        height: int,
-    ) -> tuple[float, float]:
-        left, top, right, bottom = self._plot_area(width, height)
-        display_x = max(left + 6, min(right - 6, row_x))
-        display_y = row_y
-
-        if row_y < top + 8:
-            display_y = top + 10 + ((row_index - 1) % 3) * 14
-        elif row_y > bottom - 8:
-            display_y = bottom - 10 - ((row_index - 1) % 3) * 14
-
-        return display_x, display_y
-
-    def _row_label_position(
-        self,
-        row_x: float,
-        row_y: float,
-        row_index: int,
-        label_text: str,
-        width: int,
-        height: int,
-    ) -> tuple[float, float, str]:
-        left, top, right, bottom = self._plot_area(width, height)
-        display_x, display_y = self._display_row_point(row_x, row_y, row_index, width, height)
-        label_width, label_height = self._measure_text_block(label_text, self.row_annotation_font)
-        vertical_gap = 6
-        half_height = label_height / 2.0
-        horizontal_gap = 10
-        inner_padding = 6
-
-        if display_x <= left + label_width + horizontal_gap:
-            anchor = "w"
-            label_x = display_x + horizontal_gap
-        elif display_x >= right - label_width - horizontal_gap:
-            anchor = "e"
-            label_x = display_x - horizontal_gap
-        elif row_index % 2 == 0:
-            anchor = "w"
-            label_x = display_x + horizontal_gap
-        else:
-            anchor = "e"
-            label_x = display_x - horizontal_gap
-
-        if anchor == "w":
-            label_x = min(label_x, right - label_width - inner_padding)
-            label_x = max(label_x, left + inner_padding)
-        else:
-            label_x = max(label_x, left + label_width + inner_padding)
-            label_x = min(label_x, right - inner_padding)
-
-        if display_y <= top + half_height + vertical_gap:
-            label_y = display_y + half_height + vertical_gap
-        elif display_y >= bottom - half_height - vertical_gap:
-            label_y = display_y - half_height - vertical_gap
-        else:
-            label_y = display_y - half_height - vertical_gap
-
-        label_y = max(top + half_height + inner_padding, min(bottom - half_height - inner_padding, label_y))
-        return label_x, label_y, anchor
-
-    def _redraw_map(self) -> None:
-        self.canvas.delete("all")
-        prescription = self.controller.prescription_map
-        width = max(self.canvas.winfo_width(), 720)
-        height = max(self.canvas.winfo_height(), 560)
-
-        if prescription is None:
-            self.canvas.create_text(width / 2, height / 2, text="请先导入处方图。", fill="#475569", font=("Microsoft YaHei UI", 12))
-            return
-
-        min_rate, max_rate = prescription.rate_range()
-        for cell in prescription.cells:
-            left, top = self._transform_point(cell.left, cell.top, width, height)
-            right, bottom = self._transform_point(cell.right, cell.bottom, width, height)
-            fill = self._rate_to_color(cell.target_rate_kg_ha, min_rate, max_rate)
-            self.canvas.create_rectangle(left, top, right, bottom, fill=fill, outline="#ffffff")
-            self._draw_cell_label(cell, left, top, right, bottom)
-
-        self._draw_axes(width, height, prescription.bounds)
-
+    def _on_slider_released(self, _event) -> None:
         result = self.controller.last_result
         if result is None or not result.frames:
             return
 
-        left, top, right, bottom = self._plot_area(width, height)
-        pass_points: dict[int, list[tuple[float, float]]] = {}
-        for frame in result.frames:
-            pass_points.setdefault(frame.pass_id, []).append(
-                self._transform_point(frame.machine_center_x_m, frame.machine_center_y_m, width, height)
-            )
-        for pass_id, points in pass_points.items():
-            if len(points) > 1:
-                flattened = [value for point in points for value in point]
-                self.canvas.create_line(*flattened, fill=PATH_COLOR, width=2, smooth=True, stipple="gray50")
-                max_x_point = max(points, key=lambda point: point[0])
-                label_y = max(top + 10, min(bottom - 10, max_x_point[1] - 10))
-                self._draw_text_with_bg(right - 6, label_y, f"P{pass_id}", anchor="e", fill=PATH_COLOR, font=self.pass_label_font)
+        self._cancel_live_preview_update()
+        self.current_frame_index = self._normalized_slider_index()
+        self._pending_live_frame_index = None
+        self._refresh_current_frame_details(refresh_table=True)
 
-        frame = result.frames[self.current_frame_index]
-        center_x, center_y = self._transform_point(frame.machine_center_x_m, frame.machine_center_y_m, width, height)
-        ordered_rows = sorted(frame.row_decisions, key=lambda item: item.row_index)
-        valid_rows = [item for item in ordered_rows if item.status != "out_of_field"]
-        if len(valid_rows) >= 2:
-            line_points = [self._transform_point(item.x_m, item.y_m, width, height) for item in valid_rows]
-            flattened = [value for point in line_points for value in point]
-            self.canvas.create_line(*flattened, fill=CENTER_COLOR, width=3)
+        selected = self._selected_preview_key()
+        if selected == "overview":
+            self._render_simulation_preview("overview", detailed=False, immediate=True)
+            self._mark_previews_dirty(("current",))
+        elif selected == "current":
+            self._render_simulation_preview("current", detailed=True, immediate=True)
+            self._mark_previews_dirty(("overview",))
+        else:
+            self._mark_previews_dirty(self.INTERACTIVE_PREVIEW_KEYS)
 
-        self.canvas.create_oval(center_x - 6, center_y - 6, center_x + 6, center_y + 6, fill=CENTER_COLOR, outline="")
-        arrow_length = 26
-        arrow_x = max(left + 6, min(right - 6, center_x + arrow_length * frame.direction_sign))
-        self.canvas.create_line(center_x, center_y, arrow_x, center_y, fill=CENTER_COLOR, width=2, arrow=tk.LAST)
+    def _normalized_slider_index(self, value: str | int | None = None) -> int:
+        result = self.controller.last_result
+        if result is None or not result.frames:
+            return 0
 
-        for decision in ordered_rows:
-            row_x, row_y = self._transform_point(decision.x_m, decision.y_m, width, height)
-            display_x, display_y = self._display_row_point(row_x, row_y, decision.row_index, width, height)
-            if decision.status == "out_of_field":
-                self.canvas.create_line(display_x - 5, display_y - 5, display_x + 5, display_y + 5, fill=OUT_COLOR, width=2)
-                self.canvas.create_line(display_x + 5, display_y - 5, display_x - 5, display_y + 5, fill=OUT_COLOR, width=2)
-                label_color = OUT_COLOR
-            else:
-                if decision.selected_model == "inverse_KAN":
-                    self.canvas.create_oval(display_x - 5, display_y - 5, display_x + 5, display_y + 5, fill=KAN_COLOR, outline="")
-                    label_color = KAN_COLOR
-                else:
-                    self.canvas.create_rectangle(display_x - 5, display_y - 5, display_x + 5, display_y + 5, fill=MLP_COLOR, outline="")
-                    label_color = MLP_COLOR
+        raw_value = self.frame_slider.get() if value is None else value
+        try:
+            index = int(round(float(raw_value)))
+        except (TypeError, ValueError):
+            index = 0
+        return max(0, min(index, len(result.frames) - 1))
 
-            label_text = format_row_annotation(decision)
-            label_x, label_y, anchor = self._row_label_position(
-                row_x,
-                row_y,
-                decision.row_index,
-                label_text,
-                width,
-                height,
-            )
-            justify = tk.RIGHT if anchor == "e" else tk.LEFT
-            self._draw_text_with_bg(
-                label_x,
-                label_y,
-                label_text,
-                anchor=anchor,
-                fill=label_color,
-                font=self.row_annotation_font,
-                justify=justify,
-            )
+    def _set_slider_value(self, index: int) -> None:
+        self._slider_events_suspended = True
+        try:
+            self.frame_slider.set(index)
+        finally:
+            self._slider_events_suspended = False
 
-    def _redraw_legend(self) -> None:
-        self.legend_canvas.delete("all")
-        width = max(self.legend_canvas.winfo_width(), 180)
-        height = max(self.legend_canvas.winfo_height(), 560)
-        self.legend_canvas.create_text(16, 16, anchor=tk.NW, text="地图图例", fill="#0f172a", font=("Microsoft YaHei UI", 11, "bold"))
+    def _set_result_state(self, has_result: bool) -> None:
+        slider_state = tk.NORMAL if has_result else tk.DISABLED
+        self.frame_slider.configure(
+            state=slider_state,
+            troughcolor=SLIDER_TROUGH_ACTIVE if has_result else SLIDER_TROUGH_DISABLED,
+            activebackground=SLIDER_HANDLE_ACTIVE if has_result else SLIDER_HANDLE_DISABLED,
+        )
+        self.export_button.configure(state=tk.NORMAL if has_result else tk.DISABLED)
+        can_open_export = bool(has_result and self.last_export_dir and self.last_export_dir.exists())
+        self.open_export_button.configure(state=tk.NORMAL if can_open_export else tk.DISABLED)
 
-        prescription = self.controller.prescription_map
-        if prescription is None:
-            self.legend_canvas.create_text(width / 2, height / 2, text="请先导入处方图。", fill="#64748b")
+    def _mark_previews_dirty(self, preview_keys: tuple[str, ...] | list[str] | set[str] | None = None) -> None:
+        keys = tuple(preview_keys or self.PREVIEW_TITLES.keys())
+        self.preview_dirty_keys.update(keys)
+
+    def _schedule_live_preview_update(self, preview_key: str) -> None:
+        if preview_key not in self.INTERACTIVE_PREVIEW_KEYS:
+            return
+        self._live_preview_key = preview_key
+        if self._live_preview_after_id is None:
+            self._live_preview_after_id = self.after(self.LIVE_PREVIEW_INTERVAL_MS, self._process_live_preview_update)
+
+    def _cancel_live_preview_update(self) -> None:
+        if self._live_preview_after_id is not None:
+            try:
+                self.after_cancel(self._live_preview_after_id)
+            except tk.TclError:
+                pass
+        self._live_preview_after_id = None
+        self._live_preview_key = None
+
+    def _cancel_scheduled_preview_refresh(self) -> None:
+        self._cancel_live_preview_update()
+
+    def _process_live_preview_update(self) -> None:
+        self._live_preview_after_id = None
+        result = self.controller.last_result
+        preview_key = self._selected_preview_key()
+        pending_index = self._pending_live_frame_index
+        if result is None or not result.frames or pending_index is None or preview_key not in self.INTERACTIVE_PREVIEW_KEYS:
             return
 
-        min_rate, max_rate = prescription.rate_range()
-        self.legend_canvas.create_text(16, 42, anchor=tk.NW, text="目标施肥量", fill="#334155", font=("Microsoft YaHei UI", 9))
-        self.legend_canvas.create_text(16, 58, anchor=tk.NW, text="kg/ha", fill="#64748b", font=("Microsoft YaHei UI", 9))
+        self._pending_live_frame_index = None
+        if preview_key == "overview":
+            self._render_simulation_preview("overview", detailed=False, immediate=False)
+        else:
+            self._render_simulation_preview("current", detailed=False, immediate=False)
 
-        bar_left = 40
-        bar_top = 88
-        bar_right = 62
-        bar_bottom = min(height - 210, 390)
-        steps = 48
-        height_step = (bar_bottom - bar_top) / steps
-        for index in range(steps):
-            ratio = index / max(steps - 1, 1)
-            rate = max_rate - (max_rate - min_rate) * ratio
-            y0 = bar_top + index * height_step
-            y1 = y0 + height_step + 1
-            color = self._rate_to_color(rate, min_rate, max_rate)
-            self.legend_canvas.create_rectangle(bar_left, y0, bar_right, y1, outline="", fill=color)
-        self.legend_canvas.create_rectangle(bar_left, bar_top, bar_right, bar_bottom, outline="#94a3b8")
-        self.legend_canvas.create_text(bar_right + 18, bar_top, anchor=tk.W, text=f"{max_rate:.0f}", fill="#0f172a", font=("Microsoft YaHei UI", 9))
-        self.legend_canvas.create_text(bar_right + 18, (bar_top + bar_bottom) / 2, anchor=tk.W, text=f"{(min_rate + max_rate) / 2:.0f}", fill="#334155", font=("Microsoft YaHei UI", 9))
-        self.legend_canvas.create_text(bar_right + 18, bar_bottom, anchor=tk.W, text=f"{min_rate:.0f}", fill="#0f172a", font=("Microsoft YaHei UI", 9))
+        if self._pending_live_frame_index is not None:
+            self._schedule_live_preview_update(preview_key)
 
-        legend_top = bar_bottom + 28
-        self.legend_canvas.create_text(16, legend_top, anchor=tk.NW, text="标记说明", fill="#0f172a", font=("Microsoft YaHei UI", 10, "bold"))
-        items = [
-            ("oval", KAN_COLOR, "KAN 域内决策"),
-            ("rect", MLP_COLOR, "MLP 外推决策"),
-            ("cross", OUT_COLOR, "地块外排点"),
-            ("line", CENTER_COLOR, "机具中心 / 跨排连线"),
-            ("path", PATH_COLOR, "历史轨迹"),
-        ]
-        y_cursor = legend_top + 26
-        for shape, color, text in items:
-            if shape == "oval":
-                self.legend_canvas.create_oval(18, y_cursor, 28, y_cursor + 10, fill=color, outline="")
-            elif shape == "rect":
-                self.legend_canvas.create_rectangle(18, y_cursor, 28, y_cursor + 10, fill=color, outline="")
-            elif shape == "cross":
-                self.legend_canvas.create_line(18, y_cursor, 28, y_cursor + 10, fill=color, width=2)
-                self.legend_canvas.create_line(28, y_cursor, 18, y_cursor + 10, fill=color, width=2)
-            elif shape == "line":
-                self.legend_canvas.create_line(18, y_cursor + 5, 34, y_cursor + 5, fill=color, width=2)
-                self.legend_canvas.create_oval(24, y_cursor + 1, 28, y_cursor + 9, fill=color, outline="")
+    def _refresh_preview_tabs(self, force: bool = False, preview_keys: tuple[str, ...] | None = None) -> None:
+        self._render_preview_tabs(force=force, preview_keys=preview_keys)
+
+    def _render_pending_preview_tabs(self) -> None:
+        preview_keys = tuple(self.preview_dirty_keys) if self.preview_dirty_keys else (self._selected_preview_key(),)
+        self._render_preview_tabs(force=True, preview_keys=preview_keys)
+
+    def _render_preview_tabs(self, force: bool = False, preview_keys: tuple[str, ...] | None = None) -> None:
+        del force
+        keys = preview_keys or tuple(self.PREVIEW_TITLES.keys())
+        prescription = self.controller.prescription_map
+        result = self.controller.last_result
+
+        if prescription is None:
+            for key in keys:
+                self._show_preview_placeholder(key, "请先导入处方图并运行仿真。")
+            return
+
+        if result is None or not result.frames:
+            self._preview_result_token = None
+            for key in keys:
+                if key == "overview":
+                    figure = create_prescription_overview_figure(prescription)
+                    self._show_preview_figure("overview", figure)
+                elif key == "legend":
+                    figure = create_prescription_legend_figure(prescription)
+                    self._show_preview_figure("legend", figure)
+                else:
+                    self._show_preview_placeholder("current", "运行仿真后可查看当前帧细节图。")
+            return
+
+        self._initialize_simulation_previews(result)
+        for key in keys:
+            if key == "legend":
+                self.preview_dirty_keys.discard("legend")
+                continue
+            if key == "current":
+                self._render_simulation_preview("current", detailed=True, immediate=True)
             else:
-                self.legend_canvas.create_line(18, y_cursor + 5, 34, y_cursor + 5, fill=color, width=2, stipple="gray50")
-            self.legend_canvas.create_text(44, y_cursor + 5, anchor=tk.W, text=text, fill="#334155", font=("Microsoft YaHei UI", 9))
-            y_cursor += 24
+                self._render_simulation_preview("overview", detailed=False, immediate=True)
+
+    def _initialize_simulation_previews(self, result) -> None:
+        if (
+            self._preview_result_token == id(result)
+            and "overview" in self.preview_renderers
+            and "current" in self.preview_renderers
+            and "legend" in self.preview_canvases
+        ):
+            return
+
+        for key in self.PREVIEW_TITLES:
+            self._clear_preview(key)
+
+        overview_renderer = create_overview_preview_state(result, frame_index=self.current_frame_index)
+        current_renderer = create_current_preview_state(result, frame_index=self.current_frame_index, detailed=True)
+        legend_figure = create_legend_figure(result)
+
+        self._mount_preview_figure("overview", overview_renderer.figure, renderer=overview_renderer)
+        self._mount_preview_figure("current", current_renderer.figure, renderer=current_renderer)
+        self._mount_preview_figure("legend", legend_figure)
+
+        self.preview_canvases["overview"].draw()
+        self.preview_canvases["current"].draw()
+        self.preview_canvases["legend"].draw()
+        self.preview_dirty_keys.clear()
+        self._preview_result_token = id(result)
+
+    def _render_simulation_preview(self, preview_key: str, *, detailed: bool, immediate: bool) -> None:
+        if preview_key not in self.preview_renderers:
+            result = self.controller.last_result
+            if result is None or not result.frames:
+                return
+            self._initialize_simulation_previews(result)
+
+        renderer = self.preview_renderers.get(preview_key)
+        canvas = self.preview_canvases.get(preview_key)
+        if renderer is None or canvas is None:
+            return
+
+        if preview_key == "overview":
+            renderer.update_frame(self.current_frame_index)
+        else:
+            renderer.update_frame(self.current_frame_index, detailed=detailed)
+
+        self._show_preview_host(preview_key)
+        if immediate:
+            canvas.draw()
+        else:
+            canvas.draw_idle()
+
+        if preview_key == "current" and not detailed:
+            self.preview_dirty_keys.add("current")
+        else:
+            self.preview_dirty_keys.discard(preview_key)
+
+    def _selected_preview_key(self) -> str:
+        tab_id = self.preview_notebook.select()
+        return self.preview_tab_keys.get(tab_id, "overview")
+
+    def _on_preview_tab_changed(self, _event) -> None:
+        selected = self._selected_preview_key()
+        if selected not in self.PREVIEW_TITLES:
+            return
 
         result = self.controller.last_result
-        if result is not None:
-            summary = result.summary
-            extra_top = y_cursor + 12
-            self.legend_canvas.create_text(16, extra_top, anchor=tk.NW, text="当前统计", fill="#0f172a", font=("Microsoft YaHei UI", 10, "bold"))
-            self.legend_canvas.create_text(
-                16,
-                extra_top + 22,
-                anchor=tk.NW,
-                text=(
-                    f"外推次数：{summary.get('extrapolation_count', 0)}\n"
-                    f"总单排决策：{summary.get('total_row_decisions', 0)}"
-                ),
-                fill="#334155",
-                font=("Microsoft YaHei UI", 9),
-            )
+        if result is None or not result.frames:
+            self._render_preview_tabs(force=True, preview_keys=(selected,))
+            return
+
+        self._initialize_simulation_previews(result)
+        if selected in self.preview_dirty_keys or selected not in self.preview_canvases:
+            if selected == "current":
+                self._render_simulation_preview("current", detailed=True, immediate=True)
+            elif selected == "overview":
+                self._render_simulation_preview("overview", detailed=False, immediate=True)
+
+        if self._pending_live_frame_index is not None and selected in self.INTERACTIVE_PREVIEW_KEYS:
+            self._schedule_live_preview_update(selected)
+
+    def _show_preview_placeholder(self, preview_key: str, message: str) -> None:
+        self.preview_status_vars[preview_key].set(message)
+        self._clear_preview(preview_key)
+        host = self.preview_hosts[preview_key]
+        placeholder = self.preview_placeholders[preview_key]
+        host.pack_forget()
+        placeholder.pack(fill=tk.BOTH, expand=True)
+
+    def _show_preview_host(self, preview_key: str) -> None:
+        host = self.preview_hosts[preview_key]
+        placeholder = self.preview_placeholders[preview_key]
+        placeholder.pack_forget()
+        if not host.winfo_manager():
+            host.pack(fill=tk.BOTH, expand=True)
+
+    def _show_preview_figure(self, preview_key: str, figure: object) -> None:
+        self._mount_preview_figure(preview_key, figure)
+        canvas = self.preview_canvases[preview_key]
+        canvas.draw()
+
+    def _mount_preview_figure(
+        self,
+        preview_key: str,
+        figure: object,
+        *,
+        renderer: OverviewPreviewState | CurrentFramePreviewState | None = None,
+    ) -> None:
+        if self.preview_figures.get(preview_key) is figure and preview_key in self.preview_canvases:
+            if renderer is not None:
+                self.preview_renderers[preview_key] = renderer
+            self._show_preview_host(preview_key)
+            return
+
+        self._clear_preview(preview_key)
+        host = self.preview_hosts[preview_key]
+        canvas = FigureCanvasTkAgg(figure, master=host)
+        canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+        self.preview_canvases[preview_key] = canvas
+        self.preview_figures[preview_key] = figure
+        if renderer is not None:
+            self.preview_renderers[preview_key] = renderer
+        self._show_preview_host(preview_key)
+
+    def _clear_preview(self, preview_key: str) -> None:
+        canvas = self.preview_canvases.pop(preview_key, None)
+        if canvas is not None:
+            try:
+                canvas.get_tk_widget().destroy()
+            except tk.TclError:
+                pass
+
+        figure = self.preview_figures.pop(preview_key, None)
+        if figure is not None:
+            plt.close(figure)
+
+        self.preview_renderers.pop(preview_key, None)
+        host = self.preview_hosts.get(preview_key)
+        if host is not None:
+            for child in host.winfo_children():
+                child.destroy()
+
+    def _reset_result_views(self, summary_message: str = "当前没有仿真结果。") -> None:
+        self._cancel_live_preview_update()
+        self.controller.last_result = None
+        self.current_frame_index = 0
+        self.last_export_dir = None
+        self._preview_result_token = None
+        self._pending_live_frame_index = None
+        self._live_preview_key = None
+        self._table_dirty = False
+        self._table_frame_index = None
+        self.frame_slider.configure(to=0)
+        self._set_slider_value(0)
+        self.frame_info_var.set("当前还没有仿真结果。")
+        self.summary_var.set(summary_message)
+        self._clear_decision_table()
+        for key in self.PREVIEW_TITLES:
+            self._clear_preview(key)
+        self.preview_dirty_keys = set(self.PREVIEW_TITLES)
+        self._set_result_state(has_result=False)
+        self._render_preview_tabs(force=True)
 
     def _export_results(self) -> None:
         try:
@@ -692,6 +874,7 @@ class FertilizerApp(tk.Tk):
                 highlighted_frame_index=self.current_frame_index,
             )
             self.last_export_dir = artifacts.output_dir
+            self._set_result_state(has_result=self.controller.last_result is not None)
             self._log(f"导出完成：{artifacts.output_dir}")
             messagebox.showinfo(
                 "导出完成",
@@ -708,10 +891,10 @@ class FertilizerApp(tk.Tk):
             messagebox.showerror("导出失败", str(exc))
 
     def _open_last_export_dir(self) -> None:
-        if self.last_export_dir is None:
+        if self.last_export_dir is None or not self.last_export_dir.exists():
             messagebox.showwarning("未导出", "请先导出一次结果。")
             return
-        if self.last_export_dir.exists():
+        if hasattr(os, "startfile"):
             os.startfile(self.last_export_dir)  # type: ignore[attr-defined]
 
     def _log(self, message: str) -> None:
@@ -720,7 +903,18 @@ class FertilizerApp(tk.Tk):
         self.log_text.see(tk.END)
         self.log_text.configure(state=tk.DISABLED)
 
+    def destroy(self) -> None:
+        self._cancel_live_preview_update()
+        for key in tuple(self.PREVIEW_TITLES.keys()):
+            self._clear_preview(key)
+        super().destroy()
+
 
 def launch_app() -> None:
     app = FertilizerApp(auto_load_models=True)
+    if sv_ttk is not None:
+        try:
+            sv_ttk.set_theme("light")
+        except Exception:
+            pass
     app.mainloop()
