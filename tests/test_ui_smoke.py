@@ -7,7 +7,16 @@ from tkinter import TclError
 import matplotlib.pyplot as plt
 
 from vrf_system.annotations import OUT_OF_FIELD_TEXT, format_row_annotation
-from vrf_system.domain import Bounds, MachineConfig, PrescriptionCell, RowDecision, SimulationFrame, SimulationResult
+from vrf_system.defaults import DEFAULT_FORWARD_KAN_ARTIFACT_DIR
+from vrf_system.domain import (
+    Bounds,
+    ForwardPredictionResult,
+    MachineConfig,
+    PrescriptionCell,
+    RowDecision,
+    SimulationFrame,
+    SimulationResult,
+)
 from vrf_system.prescription import PrescriptionMap
 from vrf_system.ui import FertilizerApp
 from vrf_system.visualization import create_current_preview_state, create_overview_preview_state
@@ -188,6 +197,23 @@ class UISmokeTests(unittest.TestCase):
         self.assertEqual(app.right_toggle_text.get(), "收起右栏")
         app.destroy()
 
+    def test_forward_prediction_panel_should_have_default_empty_state(self) -> None:
+        app = self.create_app()
+        self.assertEqual(app.forward_kan_dir_var.get(), str(DEFAULT_FORWARD_KAN_ARTIFACT_DIR))
+        self.assertEqual(app.forward_prediction_var.get(), "请输入开度与转速后执行预测。")
+        self.assertEqual(app.forward_predict_button.cget("text"), "执行正向预测")
+        app.destroy()
+
+    def test_left_panel_should_create_scrollable_form_area_and_fixed_log_area(self) -> None:
+        app = self.create_app()
+        self.assertIsNotNone(app.left_form_canvas)
+        self.assertIsNotNone(app.left_form_scrollbar)
+        self.assertIsNotNone(app.left_form_content)
+        self.assertIsNotNone(app.left_log_box)
+        self.assertEqual(str(app.left_form_scrollbar.cget("orient")), "vertical")
+        self.assertEqual(str(app.log_text.master.master), str(app.left_log_box))
+        app.destroy()
+
     def test_side_panels_should_toggle_independently_and_restore_order(self) -> None:
         app = self.create_app()
 
@@ -269,6 +295,20 @@ class UISmokeTests(unittest.TestCase):
 
         self.assertEqual(sorted(app.preview_canvases.keys()), ["legend", "overview"])
         self.assertIn("运行仿真后可查看当前帧细节", app.preview_status_vars["current"].get())
+        app.destroy()
+
+    def test_left_panel_scroll_region_should_refresh_and_allow_programmatic_scroll(self) -> None:
+        app = self.create_app()
+        app.deiconify()
+        app.geometry("1480x860")
+        app.update()
+
+        scroll_region = tuple(int(float(v)) for v in app.left_form_canvas.cget("scrollregion").split())
+        self.assertEqual(len(scroll_region), 4)
+        self.assertGreater(scroll_region[3], scroll_region[1])
+        app.left_form_canvas.yview_moveto(1.0)
+        app.update_idletasks()
+        self.assertGreaterEqual(app.left_form_canvas.yview()[1], app.left_form_canvas.yview()[0])
         app.destroy()
 
     def test_overview_preview_should_render_annotations_for_current_frame(self) -> None:
@@ -382,6 +422,26 @@ class UISmokeTests(unittest.TestCase):
         self.assertEqual(len(app.decision_table.get_children()), len(result.frames[1].row_decisions))
         app.destroy()
 
+    def test_left_panel_scroll_region_should_refresh_after_collapse_and_expand(self) -> None:
+        app = self.create_app()
+        app.deiconify()
+        app.update()
+
+        before = tuple(int(float(v)) for v in app.left_form_canvas.cget("scrollregion").split())
+        app.left_toggle_button.invoke()
+        app.update()
+        app.left_toggle_button.invoke()
+        app.update()
+        after = tuple(int(float(v)) for v in app.left_form_canvas.cget("scrollregion").split())
+
+        self.assertEqual(len(before), 4)
+        self.assertEqual(len(after), 4)
+        self.assertGreater(after[3], after[1])
+        app.left_form_canvas.yview_moveto(1.0)
+        app.update_idletasks()
+        self.assertGreaterEqual(app.left_form_canvas.yview()[1], app.left_form_canvas.yview()[0])
+        app.destroy()
+
     def test_switching_to_dirty_current_tab_should_render_detailed_final_frame(self) -> None:
         app = self.create_app()
         prescription = build_sample_prescription_map()
@@ -408,6 +468,69 @@ class UISmokeTests(unittest.TestCase):
         self.assertEqual(current_renderer.rendered_frame_index, 1)
         self.assertTrue(current_renderer.detailed)
         self.assertNotIn("current", app.preview_dirty_keys)
+        app.destroy()
+
+    def test_forward_prediction_should_update_panel_without_mutating_simulation_views(self) -> None:
+        app = self.create_app()
+        prescription = build_sample_prescription_map()
+        result = build_sample_result()
+
+        app.controller.prescription_map = prescription
+        app.controller.last_result = result
+        app.frame_slider.configure(to=len(result.frames) - 1)
+        app._set_result_state(has_result=True)
+        app._refresh_summary()
+        app._refresh_current_frame_details(refresh_table=True)
+        app._render_preview_tabs(force=True)
+        app.update_idletasks()
+
+        captured: dict[str, float | None] = {}
+
+        def fake_predict_forward_mass(
+            opening_mm: float,
+            speed_r_min: float,
+            *,
+            row_spacing_m: float | None = None,
+            travel_speed_kmh: float | None = None,
+        ) -> ForwardPredictionResult:
+            captured["opening_mm"] = opening_mm
+            captured["speed_r_min"] = speed_r_min
+            captured["row_spacing_m"] = row_spacing_m
+            captured["travel_speed_kmh"] = travel_speed_kmh
+            return ForwardPredictionResult(
+                opening_mm=opening_mm,
+                speed_r_min=speed_r_min,
+                predicted_mass_g_min=2150.5,
+                equivalent_rate_kg_ha=358.42,
+                selected_model="forward_KAN",
+                domain_status="speed_extrapolation",
+                status="ok",
+            )
+
+        app.controller.forward_kan_bundle = object()  # type: ignore[assignment]
+        app.controller.predict_forward_mass = fake_predict_forward_mass  # type: ignore[method-assign]
+        summary_before = app.summary_var.get()
+        frame_info_before = app.frame_info_var.get()
+        table_count_before = len(app.decision_table.get_children())
+        log_before = app.log_text.get("1.0", "end-1c")
+
+        app.forward_opening_var.set("35")
+        app.forward_speed_var.set("65")
+        app._run_forward_prediction()
+        app.update_idletasks()
+
+        self.assertEqual(captured["opening_mm"], 35.0)
+        self.assertEqual(captured["speed_r_min"], 65.0)
+        self.assertEqual(captured["row_spacing_m"], 0.6)
+        self.assertEqual(captured["travel_speed_kmh"], 6.0)
+        self.assertEqual(app.summary_var.get(), summary_before)
+        self.assertEqual(app.frame_info_var.get(), frame_info_before)
+        self.assertEqual(len(app.decision_table.get_children()), table_count_before)
+        self.assertIn("预测排肥量：2150.50 g/min", app.forward_prediction_var.get())
+        self.assertIn("转速外推", app.forward_prediction_var.get())
+        log_after = app.log_text.get("1.0", "end-1c")
+        self.assertIn("前向预测", log_after)
+        self.assertGreater(len(log_after), len(log_before))
         app.destroy()
 
     def test_current_preview_should_place_legend_and_colorbar_in_right_sidebar(self) -> None:

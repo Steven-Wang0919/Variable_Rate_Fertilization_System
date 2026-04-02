@@ -114,6 +114,20 @@ class ModelBundleConfig:
 
 
 @dataclass(slots=True)
+class ForwardPredictionResult:
+    opening_mm: float
+    speed_r_min: float
+    predicted_mass_g_min: float
+    equivalent_rate_kg_ha: float | None
+    selected_model: str
+    domain_status: str
+    status: str
+
+    def to_record(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(slots=True)
 class RowDecision:
     timestamp_ms: int
     pass_id: int

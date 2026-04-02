@@ -4,6 +4,7 @@
 
 - 导入 `CSV` 网格处方图
 - 按单个排肥器独立生成变量施肥决策
+- 基于论文最优前向 KAN 模型执行单点排肥量预测
 - 根据处方图和机具参数进行作业仿真
 - 导出时间线控制指令、模型路由追踪和仿真摘要
 - 导出地图总览图、当前时刻细节图和独立图例图
@@ -12,6 +13,7 @@
 
 - `inverse_KAN`：域内优先模型
 - `inverse_MLP`：外推优先模型
+- `forward_KAN`：正向预测最佳模型（开度、转速 -> 排肥量）
 
 ## 1. 功能概览
 
@@ -37,11 +39,27 @@ target_mass_g_min = target_rate_kg_ha * row_spacing_m * travel_speed_kmh * 1.666
 
 桌面端基于标准库 `tkinter` 实现，默认三栏布局：
 
-- 左侧：处方图、模型包、机器参数
+- 左侧：处方图、模型包、正向预测、机器参数
 - 中间：带坐标轴、热力图图例、机具轨迹、当前跨排行走状态的地图视图
 - 右侧：当前时刻排位决策表、模型路由摘要、导出按钮
 
-### 1.4 导出内容
+### 1.4 正向预测
+
+左侧面板新增“正向预测”卡片，默认加载论文主结果中的 `forward_KAN` 工件，支持输入：
+
+- 开度 `opening_mm`
+- 转速 `speed_r_min`
+
+点击“执行正向预测”后，界面会显示：
+
+- 预测排肥量 `g/min`
+- 按当前“行距 + 作业速度”反算的等效施肥量 `kg/ha`
+- 训练域状态（域内 / 开度外推 / 转速外推 / 双外推）
+- 预测状态（正常 / 低值钳制）
+
+若当前行距或作业速度无效，则仍显示 `g/min` 预测结果，但不显示等效 `kg/ha`。
+
+### 1.5 导出内容
 
 每次导出默认生成 6 份文件：
 
@@ -63,6 +81,7 @@ target_mass_g_min = target_rate_kg_ha * row_spacing_m * travel_speed_kmh * 1.666
 │   └── prescription_grid.csv
 ├── tests/
 │   ├── test_engine_and_export.py
+│   ├── test_forward_prediction.py
 │   ├── test_model_runtime.py
 │   ├── test_prescription.py
 │   └── test_ui_smoke.py
@@ -130,5 +149,10 @@ python -m unittest discover -s tests -v
 
 - [inverse_KAN](D:/Personal/eclipse_workspace/12.10/ComPare/runs/20260326T200342_compare_all/artifacts/inverse/inverse_KAN)
 - [inverse_MLP](D:/Personal/eclipse_workspace/12.10/ComPare/runs/20260326T200342_compare_all/artifacts/inverse/inverse_MLP)
+- [forward_KAN](D:/Personal/eclipse_workspace/12.10/ComPare/runs/20260326T200342_compare_all/artifacts/forward/KAN)
+
+前向 KAN 的参考预测文件位于：
+
+- [forward_model_predictions.csv](D:/Personal/eclipse_workspace/12.10/ComPare/runs/20260326T200342_compare_all/forward_model_predictions.csv)
 
 如果后续你重新训练并导出了新模型，也可以在界面中选择新的模型目录重新加载。

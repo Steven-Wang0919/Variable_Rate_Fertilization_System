@@ -13,11 +13,14 @@ try:
 except ImportError:  # pragma: no cover - 打包后的精简运行时允许不带 torch
     torch = None
 
-from .defaults import DEFAULT_KAN_ARTIFACT_DIR, DEFAULT_MLP_ARTIFACT_DIR
+from .defaults import DEFAULT_FORWARD_KAN_ARTIFACT_DIR, DEFAULT_KAN_ARTIFACT_DIR, DEFAULT_MLP_ARTIFACT_DIR
 from .domain import ModelBundleConfig
 
 
 EPS = 1e-8
+INVERSE_MODEL_TYPES = {"inverse_KAN", "inverse_MLP"}
+FORWARD_MODEL_TYPES = {"forward_KAN"}
+KAN_MODEL_TYPES = {"inverse_KAN", "forward_KAN"}
 KAN_NPZ_KEYS = {
     "kan1_input_grid": "kan1.input_grid",
     "kan1_base_weight": "kan1.base_weight",
@@ -78,24 +81,30 @@ class ModelBundle:
     def norm(self) -> dict[str, Any]:
         return dict(self.meta.get("normalization_params", {}))
 
-    def in_training_domain(self, target_mass_g_min: float, opening_mm: float) -> bool:
+    def in_training_domain(self, first_feature: float, second_feature: float) -> bool:
         domain = self.training_domain
-        return (
-            float(domain["target_mass_min"]) <= float(target_mass_g_min) <= float(domain["target_mass_max"])
-            and float(domain["opening_min"]) <= float(opening_mm) <= float(domain["opening_max"])
-        )
+        if self.config.model_type in INVERSE_MODEL_TYPES:
+            return (
+                float(domain["target_mass_min"]) <= float(first_feature) <= float(domain["target_mass_max"])
+                and float(domain["opening_min"]) <= float(second_feature) <= float(domain["opening_max"])
+            )
+        if self.config.model_type in FORWARD_MODEL_TYPES:
+            return (
+                float(domain["opening_min"]) <= float(first_feature) <= float(domain["opening_max"])
+                and float(domain["speed_min"]) <= float(second_feature) <= float(domain["speed_max"])
+            )
+        raise ModelArtifactError(f"不支持的模型类型：{self.config.model_type}")
 
-    def predict_speed(self, target_mass_g_min: float, opening_mm: float) -> float:
-        features = np.asarray([[float(target_mass_g_min), float(opening_mm)]], dtype=np.float32)
+    def _predict_scaled_output(self, features: np.ndarray) -> float:
         x_min = np.asarray(self.norm["X_min"], dtype=np.float32)
         x_max = np.asarray(self.norm["X_max"], dtype=np.float32)
-        y_min = float(self.norm["y_min"])
-        y_max = float(self.norm["y_max"])
+        y_min = _scalar_norm_value(self.norm["y_min"])
+        y_max = _scalar_norm_value(self.norm["y_max"])
         features_norm = (features - x_min) / (x_max - x_min + EPS)
 
         if self.config.model_type == "inverse_MLP":
             pred_norm = np.asarray(self.model.predict(features_norm), dtype=np.float32).reshape(-1)
-        elif self.config.model_type == "inverse_KAN":
+        elif self.config.model_type in KAN_MODEL_TYPES:
             pred_norm = np.asarray(self.model.predict(features_norm), dtype=np.float32).reshape(-1)
         else:
             raise ModelArtifactError(f"不支持的模型类型：{self.config.model_type}")
@@ -103,9 +112,25 @@ class ModelBundle:
         pred_raw = pred_norm * (y_max - y_min + EPS) + y_min
         return float(pred_raw.reshape(-1)[0])
 
+    def predict_speed(self, target_mass_g_min: float, opening_mm: float) -> float:
+        if self.config.model_type not in INVERSE_MODEL_TYPES:
+            raise ModelArtifactError(f"{self.config.model_type} 不是反向预测模型。")
+        features = np.asarray([[float(target_mass_g_min), float(opening_mm)]], dtype=np.float32)
+        return self._predict_scaled_output(features)
+
+    def predict_mass(self, opening_mm: float, speed_r_min: float) -> float:
+        if self.config.model_type not in FORWARD_MODEL_TYPES:
+            raise ModelArtifactError(f"{self.config.model_type} 不是正向预测模型。")
+        features = np.asarray([[float(opening_mm), float(speed_r_min)]], dtype=np.float32)
+        return self._predict_scaled_output(features)
+
 
 def _silu(x: np.ndarray) -> np.ndarray:
     return np.asarray(x / (1.0 + np.exp(-x)), dtype=np.float32)
+
+
+def _scalar_norm_value(value: Any) -> float:
+    return float(np.asarray(value, dtype=np.float32).reshape(-1)[0])
 
 
 def _kan_b_splines(
@@ -214,9 +239,18 @@ def build_default_model_configs() -> tuple[ModelBundleConfig, ModelBundleConfig]
     return kan, mlp
 
 
+def build_default_forward_model_config() -> ModelBundleConfig:
+    return ModelBundleConfig(
+        name="forward_KAN",
+        model_type="forward_KAN",
+        model_path=_resolve_kan_model_path(DEFAULT_FORWARD_KAN_ARTIFACT_DIR),
+        meta_path=DEFAULT_FORWARD_KAN_ARTIFACT_DIR / "meta.json",
+    )
+
+
 def bundle_config_from_artifact_dir(name: str, model_type: str, artifact_dir: str | Path) -> ModelBundleConfig:
     artifact_path = Path(artifact_dir).resolve()
-    if model_type == "inverse_KAN":
+    if model_type in KAN_MODEL_TYPES:
         model_path = _resolve_kan_model_path(artifact_path)
     elif model_type == "inverse_MLP":
         model_path = artifact_path / "model.joblib"
@@ -239,7 +273,7 @@ def load_model_bundle(config: ModelBundleConfig) -> ModelBundle:
     meta = json.loads(config.meta_path.read_text(encoding="utf-8"))
     if config.model_type == "inverse_MLP":
         model = joblib.load(config.model_path)
-    elif config.model_type == "inverse_KAN":
+    elif config.model_type in KAN_MODEL_TYPES:
         if config.model_path.suffix.lower() == ".npz":
             state = _load_kan_npz_state(config.model_path)
         else:

@@ -15,12 +15,13 @@ except ImportError:  # pragma: no cover - optional dependency fallback
 
 from .controller import SimulationController
 from .defaults import (
+    DEFAULT_FORWARD_KAN_ARTIFACT_DIR,
     DEFAULT_KAN_ARTIFACT_DIR,
     DEFAULT_MLP_ARTIFACT_DIR,
     DEFAULT_OUTPUT_ROOT,
     DEFAULT_SAMPLE_PRESCRIPTION,
 )
-from .domain import MachineConfig
+from .domain import ForwardPredictionResult, MachineConfig
 from .visualization import (
     CurrentFramePreviewState,
     OverviewPreviewState,
@@ -75,6 +76,7 @@ class FertilizerApp(tk.Tk):
 
         self.kan_dir_var = tk.StringVar(value=str(DEFAULT_KAN_ARTIFACT_DIR))
         self.mlp_dir_var = tk.StringVar(value=str(DEFAULT_MLP_ARTIFACT_DIR))
+        self.forward_kan_dir_var = tk.StringVar(value=str(DEFAULT_FORWARD_KAN_ARTIFACT_DIR))
         self.prescription_path_var = tk.StringVar(value=str(DEFAULT_SAMPLE_PRESCRIPTION))
         self.output_root_var = tk.StringVar(value=str(DEFAULT_OUTPUT_ROOT))
         self.row_count_var = tk.StringVar(value="6")
@@ -83,8 +85,11 @@ class FertilizerApp(tk.Tk):
         self.sample_period_var = tk.StringVar(value="200")
         self.longitudinal_offset_var = tk.StringVar(value="0.0")
         self.row_offsets_var = tk.StringVar(value="")
+        self.forward_opening_var = tk.StringVar(value="")
+        self.forward_speed_var = tk.StringVar(value="")
         self.frame_info_var = tk.StringVar(value="当前还没有仿真结果。")
         self.summary_var = tk.StringVar(value="请先加载模型并导入处方图。")
+        self.forward_prediction_var = tk.StringVar(value="请输入开度与转速后执行预测。")
 
         self.left_toggle_text = tk.StringVar(value="收起左栏")
         self.right_toggle_text = tk.StringVar(value="收起右栏")
@@ -93,8 +98,14 @@ class FertilizerApp(tk.Tk):
         self.left_panel: ttk.Frame | None = None
         self.center_panel: ttk.Frame | None = None
         self.right_panel: ttk.Frame | None = None
+        self.left_form_canvas: tk.Canvas | None = None
+        self.left_form_scrollbar: ttk.Scrollbar | None = None
+        self.left_form_content: ttk.Frame | None = None
+        self.left_form_window_id: int | None = None
+        self.left_log_box: ttk.LabelFrame | None = None
         self.left_toggle_button: ttk.Button | None = None
         self.right_toggle_button: ttk.Button | None = None
+        self.forward_predict_button: ttk.Button | None = None
         self.left_collapsed = False
         self.right_collapsed = False
         self.saved_left_width: int | None = None
@@ -164,6 +175,44 @@ class FertilizerApp(tk.Tk):
         self._build_right_panel(self.right_panel)
 
     def _build_left_panel(self, parent: ttk.Frame) -> None:
+        parent.columnconfigure(0, weight=1)
+        parent.rowconfigure(0, weight=1)
+
+        scroll_box = ttk.Frame(parent, style="Card.TFrame")
+        scroll_box.grid(row=0, column=0, sticky="nsew")
+        scroll_box.columnconfigure(0, weight=1)
+        scroll_box.rowconfigure(0, weight=1)
+
+        self.left_form_canvas = tk.Canvas(
+            scroll_box,
+            bg=SURFACE_BG,
+            borderwidth=0,
+            highlightthickness=0,
+            relief=tk.FLAT,
+        )
+        self.left_form_canvas.grid(row=0, column=0, sticky="nsew")
+        self.left_form_scrollbar = ttk.Scrollbar(scroll_box, orient=tk.VERTICAL, command=self.left_form_canvas.yview)
+        self.left_form_scrollbar.grid(row=0, column=1, sticky="ns", padx=(8, 0))
+        self.left_form_canvas.configure(yscrollcommand=self.left_form_scrollbar.set)
+
+        self.left_form_content = ttk.Frame(self.left_form_canvas, style="Card.TFrame", padding=(0, 0, 4, 0))
+        self.left_form_window_id = self.left_form_canvas.create_window((0, 0), window=self.left_form_content, anchor="nw")
+        self.left_form_content.bind("<Configure>", self._on_left_form_content_configure)
+        self.left_form_canvas.bind("<Configure>", self._on_left_form_canvas_configure)
+
+        self._build_left_form_content(self.left_form_content)
+        self._bind_left_form_mousewheel_widgets(self.left_form_content)
+        self.after_idle(self._refresh_left_form_scrollregion)
+
+        self.left_log_box = ttk.LabelFrame(parent, text="运行日志", padding=12)
+        self.left_log_box.grid(row=1, column=0, sticky="ew", pady=(12, 0))
+        self.left_log_box.columnconfigure(0, weight=1)
+        self.left_log_box.rowconfigure(0, weight=1)
+        self.log_text = scrolledtext.ScrolledText(self.left_log_box, height=12, wrap=tk.WORD, borderwidth=0, relief=tk.FLAT)
+        self.log_text.grid(row=0, column=0, sticky="nsew")
+        self.log_text.configure(state=tk.DISABLED)
+
+    def _build_left_form_content(self, parent: ttk.Frame) -> None:
         model_box = ttk.LabelFrame(parent, text="模型包管理", padding=12)
         model_box.pack(fill=tk.X, pady=(0, 12))
         ttk.Label(model_box, text="KAN 模型目录").pack(anchor=tk.W)
@@ -184,6 +233,41 @@ class FertilizerApp(tk.Tk):
             command=self._load_default_models,
             style="Secondary.TButton",
         ).pack(fill=tk.X, pady=(8, 0))
+
+        forward_prediction_box = ttk.LabelFrame(parent, text="正向预测", padding=12)
+        forward_prediction_box.pack(fill=tk.X, pady=(0, 12))
+        ttk.Label(forward_prediction_box, text="前向 KAN 模型目录").pack(anchor=tk.W)
+        ttk.Entry(forward_prediction_box, textvariable=self.forward_kan_dir_var).pack(fill=tk.X, pady=(4, 8))
+        ttk.Button(
+            forward_prediction_box,
+            text="选择前向 KAN 目录",
+            command=self._choose_forward_kan_dir,
+            style="Secondary.TButton",
+        ).pack(fill=tk.X)
+        ttk.Label(
+            forward_prediction_box,
+            text="默认使用论文主结果中的最佳前向模型 KAN。",
+            style="Note.TLabel",
+            wraplength=300,
+        ).pack(anchor=tk.W, pady=(8, 8))
+        self._add_labeled_entry(forward_prediction_box, "开度 (mm)", self.forward_opening_var)
+        self._add_labeled_entry(forward_prediction_box, "转速 (r/min)", self.forward_speed_var)
+        self.forward_predict_button = ttk.Button(
+            forward_prediction_box,
+            text="执行正向预测",
+            command=self._run_forward_prediction,
+            style="Primary.TButton",
+        )
+        self.forward_predict_button.pack(fill=tk.X, pady=(8, 0))
+        tk.Label(
+            forward_prediction_box,
+            textvariable=self.forward_prediction_var,
+            wraplength=300,
+            justify=tk.LEFT,
+            bg=SURFACE_BG,
+            fg=TEXT_PRIMARY,
+            font=("Microsoft YaHei UI", 10),
+        ).pack(anchor=tk.W, pady=(10, 0))
 
         prescription_box = ttk.LabelFrame(parent, text="处方图", padding=12)
         prescription_box.pack(fill=tk.X, pady=(0, 12))
@@ -239,12 +323,6 @@ class FertilizerApp(tk.Tk):
             command=self._choose_output_root,
             style="Secondary.TButton",
         ).pack(fill=tk.X)
-
-        log_box = ttk.LabelFrame(parent, text="运行日志", padding=12)
-        log_box.pack(fill=tk.BOTH, expand=True)
-        self.log_text = scrolledtext.ScrolledText(log_box, height=12, wrap=tk.WORD, borderwidth=0, relief=tk.FLAT)
-        self.log_text.pack(fill=tk.BOTH, expand=True)
-        self.log_text.configure(state=tk.DISABLED)
 
     def _build_center_panel(self, parent: ttk.Frame) -> None:
         parent.columnconfigure(0, weight=1)
@@ -483,6 +561,7 @@ class FertilizerApp(tk.Tk):
             self.update_idletasks()
             for index, position in sash_positions:
                 self.main_pane.sashpos(index, position)
+        self.after_idle(self._refresh_left_form_scrollregion)
 
     def _toggle_left_panel(self) -> None:
         if self.main_pane is None or self.left_panel is None:
@@ -492,6 +571,7 @@ class FertilizerApp(tk.Tk):
             self.main_pane.insert(0, self.left_panel, weight=LEFT_PANEL_WEIGHT)
             self.left_collapsed = False
             self.after_idle(self._restore_side_panel_widths)
+            self.after_idle(self._refresh_left_form_scrollregion)
         else:
             self._remember_visible_panel_widths()
             self.main_pane.forget(self.left_panel)
@@ -511,6 +591,54 @@ class FertilizerApp(tk.Tk):
             self.main_pane.forget(self.right_panel)
             self.right_collapsed = True
         self._refresh_panel_toggle_texts()
+
+    def _on_left_form_content_configure(self, _event=None) -> None:
+        self._refresh_left_form_scrollregion()
+
+    def _on_left_form_canvas_configure(self, event) -> None:
+        if self.left_form_canvas is None or self.left_form_window_id is None:
+            return
+        self.left_form_canvas.itemconfigure(self.left_form_window_id, width=max(int(event.width), 1))
+        self._refresh_left_form_scrollregion()
+
+    def _refresh_left_form_scrollregion(self) -> None:
+        if self.left_form_canvas is None:
+            return
+        self.left_form_canvas.update_idletasks()
+        bbox = self.left_form_canvas.bbox("all")
+        if bbox is None:
+            self.left_form_canvas.configure(scrollregion=(0, 0, 0, 0))
+            return
+        self.left_form_canvas.configure(scrollregion=bbox)
+
+    def _bind_left_form_mousewheel_widgets(self, root: tk.Misc) -> None:
+        sequences = ("<MouseWheel>", "<Button-4>", "<Button-5>")
+        for widget in self._iter_widget_tree(root):
+            for sequence in sequences:
+                widget.bind(sequence, self._on_left_form_mousewheel, add="+")
+
+    def _iter_widget_tree(self, widget: tk.Misc):
+        yield widget
+        for child in widget.winfo_children():
+            yield from self._iter_widget_tree(child)
+
+    def _on_left_form_mousewheel(self, event) -> str:
+        if self.left_form_canvas is None:
+            return "break"
+
+        delta = 0
+        if getattr(event, "delta", 0):
+            delta = -int(event.delta / 120)
+            if delta == 0:
+                delta = -1 if event.delta > 0 else 1
+        elif getattr(event, "num", None) == 4:
+            delta = -1
+        elif getattr(event, "num", None) == 5:
+            delta = 1
+
+        if delta != 0:
+            self.left_form_canvas.yview_scroll(delta, "units")
+        return "break"
 
     def _add_labeled_entry(self, parent: ttk.Frame, label: str, variable: tk.StringVar, note: str | None = None) -> None:
         row = ttk.Frame(parent, style="Card.TFrame")
@@ -532,6 +660,14 @@ class FertilizerApp(tk.Tk):
         if path:
             self.mlp_dir_var.set(path)
 
+    def _choose_forward_kan_dir(self) -> None:
+        path = filedialog.askdirectory(
+            title="选择 forward_KAN 模型目录",
+            initialdir=self.forward_kan_dir_var.get() or str(Path.cwd()),
+        )
+        if path:
+            self.forward_kan_dir_var.set(path)
+
     def _choose_prescription_csv(self) -> None:
         path = filedialog.askopenfilename(
             title="选择处方图 CSV",
@@ -550,14 +686,35 @@ class FertilizerApp(tk.Tk):
     def _load_default_models(self, show_message: bool = True) -> None:
         self.kan_dir_var.set(str(DEFAULT_KAN_ARTIFACT_DIR))
         self.mlp_dir_var.set(str(DEFAULT_MLP_ARTIFACT_DIR))
+        self.forward_kan_dir_var.set(str(DEFAULT_FORWARD_KAN_ARTIFACT_DIR))
         self._load_models_from_current_inputs(show_message=show_message)
+
+    def _load_inverse_models_from_current_inputs(self, *, log_success: bool = True):
+        kan_bundle, mlp_bundle = self.controller.load_models_from_dirs(self.kan_dir_var.get(), self.mlp_dir_var.get())
+        if log_success:
+            self._log(f"已加载决策模型：{kan_bundle.config.name}、{mlp_bundle.config.name}")
+        return kan_bundle, mlp_bundle
+
+    def _load_forward_model_from_current_input(self, *, log_success: bool = True):
+        forward_bundle = self.controller.load_forward_model_from_dir(self.forward_kan_dir_var.get())
+        if log_success:
+            self._log(f"已加载预测模型：{forward_bundle.config.name}")
+        return forward_bundle
 
     def _load_models_from_current_inputs(self, show_message: bool = True) -> None:
         try:
-            kan_bundle, mlp_bundle = self.controller.load_models_from_dirs(self.kan_dir_var.get(), self.mlp_dir_var.get())
-            self._log(f"已加载模型：{kan_bundle.config.name} 与 {mlp_bundle.config.name}")
+            kan_bundle, mlp_bundle = self._load_inverse_models_from_current_inputs(log_success=False)
+            forward_bundle = self._load_forward_model_from_current_input(log_success=False)
+            self._log(
+                "已加载决策模型："
+                f"{kan_bundle.config.name}、{mlp_bundle.config.name}；"
+                f"已加载预测模型：{forward_bundle.config.name}"
+            )
             if show_message:
-                messagebox.showinfo("模型加载完成", "已成功加载 KAN 与 MLP 模型包。")
+                messagebox.showinfo(
+                    "模型加载完成",
+                    "已成功加载决策模型（inverse_KAN、inverse_MLP）和预测模型（forward_KAN）。",
+                )
         except Exception as exc:  # noqa: BLE001
             self._log(f"模型加载失败：{exc}")
             if show_message:
@@ -588,6 +745,64 @@ class FertilizerApp(tk.Tk):
             row_offsets_m=row_offsets,
         )
 
+    def _parse_forward_prediction_inputs(self) -> tuple[float, float]:
+        opening_text = self.forward_opening_var.get().strip()
+        speed_text = self.forward_speed_var.get().strip()
+        if not opening_text or not speed_text:
+            raise ValueError("请输入开度和转速。")
+        try:
+            opening_mm = float(opening_text)
+            speed_r_min = float(speed_text)
+        except ValueError as exc:
+            raise ValueError("开度和转速必须为数字。") from exc
+        if opening_mm < 0 or speed_r_min < 0:
+            raise ValueError("开度和转速不能为负数。")
+        return opening_mm, speed_r_min
+
+    def _forward_rate_context(self) -> tuple[float | None, float | None]:
+        try:
+            row_spacing_m = float(self.row_spacing_var.get())
+            travel_speed_kmh = float(self.travel_speed_var.get())
+        except ValueError:
+            return None, None
+        if row_spacing_m <= 0 or travel_speed_kmh <= 0:
+            return None, None
+        return row_spacing_m, travel_speed_kmh
+
+    def _forward_domain_status_text(self, domain_status: str) -> str:
+        mapping = {
+            "in_domain": "训练域内",
+            "opening_extrapolation": "开度外推",
+            "speed_extrapolation": "转速外推",
+            "opening_and_speed_extrapolation": "开度与转速外推",
+        }
+        return mapping.get(domain_status, domain_status)
+
+    def _forward_prediction_status_text(self, status: str) -> str:
+        mapping = {
+            "ok": "正常",
+            "clamped_low": "预测结果低于 0，已钳制到 0",
+        }
+        return mapping.get(status, status)
+
+    def _format_forward_prediction(self, result: ForwardPredictionResult) -> str:
+        lines = [
+            f"输入：开度 {result.opening_mm:.1f} mm，转速 {result.speed_r_min:.2f} r/min",
+            f"预测排肥量：{result.predicted_mass_g_min:.2f} g/min",
+        ]
+        if result.equivalent_rate_kg_ha is None:
+            lines.append("等效施肥量：需填写有效行距和作业速度后显示")
+        else:
+            lines.append(f"等效施肥量：{result.equivalent_rate_kg_ha:.2f} kg/ha")
+        lines.extend(
+            [
+                f"模型：{result.selected_model}",
+                f"训练域状态：{self._forward_domain_status_text(result.domain_status)}",
+                f"预测状态：{self._forward_prediction_status_text(result.status)}",
+            ]
+        )
+        return "\n".join(lines)
+
     def _reset_machine_defaults(self) -> None:
         self.row_count_var.set("6")
         self.row_spacing_var.set("0.6")
@@ -597,10 +812,35 @@ class FertilizerApp(tk.Tk):
         self.row_offsets_var.set("")
         self._log("已恢复默认机器参数。")
 
+    def _run_forward_prediction(self) -> None:
+        try:
+            if self.controller.forward_kan_bundle is None:
+                self._load_forward_model_from_current_input(log_success=False)
+
+            opening_mm, speed_r_min = self._parse_forward_prediction_inputs()
+            row_spacing_m, travel_speed_kmh = self._forward_rate_context()
+            result = self.controller.predict_forward_mass(
+                opening_mm,
+                speed_r_min,
+                row_spacing_m=row_spacing_m,
+                travel_speed_kmh=travel_speed_kmh,
+            )
+            self.forward_prediction_var.set(self._format_forward_prediction(result))
+            self._log(
+                "前向预测："
+                f"开度 {result.opening_mm:.1f} mm，"
+                f"转速 {result.speed_r_min:.2f} r/min，"
+                f"排肥量 {result.predicted_mass_g_min:.2f} g/min，"
+                f"训练域状态 {self._forward_domain_status_text(result.domain_status)}"
+            )
+        except Exception as exc:  # noqa: BLE001
+            self._log(f"前向预测失败：{exc}")
+            messagebox.showerror("前向预测失败", str(exc))
+
     def _run_simulation(self) -> None:
         try:
             if self.controller.router is None:
-                self._load_models_from_current_inputs(show_message=False)
+                self._load_inverse_models_from_current_inputs(log_success=False)
             if self.controller.prescription_map is None:
                 if self.prescription_path_var.get():
                     self._load_prescription(self.prescription_path_var.get())

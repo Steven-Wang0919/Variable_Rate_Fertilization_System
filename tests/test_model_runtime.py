@@ -10,10 +10,13 @@ import pandas as pd
 
 from vrf_system.defaults import (
     DEFAULT_CANONICAL_PREDICTIONS,
+    DEFAULT_FORWARD_CANONICAL_PREDICTIONS,
+    DEFAULT_FORWARD_KAN_ARTIFACT_DIR,
     DEFAULT_KAN_ARTIFACT_DIR,
     DEFAULT_MLP_ARTIFACT_DIR,
 )
 from vrf_system.model_runtime import (
+    build_default_forward_model_config,
     build_default_model_configs,
     bundle_config_from_artifact_dir,
     export_kan_model_to_npz,
@@ -68,3 +71,24 @@ class ModelRuntimeTests(unittest.TestCase):
             ]
             expected = self.reference_df["inverse_KAN_pred"].to_numpy(dtype=float)
             np.testing.assert_allclose(predicted, expected, atol=1e-4, rtol=1e-5)
+
+
+@unittest.skipUnless(
+    DEFAULT_FORWARD_CANONICAL_PREDICTIONS.exists() and DEFAULT_FORWARD_KAN_ARTIFACT_DIR.exists(),
+    "默认前向 KAN 模型工件不存在，跳过前向预测一致性测试。",
+)
+class ForwardModelRuntimeTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        forward_config = build_default_forward_model_config()
+        cls.forward_bundle = load_model_bundle(forward_config)
+        cls.reference_df = pd.read_csv(DEFAULT_FORWARD_CANONICAL_PREDICTIONS)
+        cls.forward_inputs = np.load(DEFAULT_FORWARD_KAN_ARTIFACT_DIR / "test_inputs.npy")
+
+    def test_forward_kan_prediction_matches_reference_output(self) -> None:
+        predicted = [
+            self.forward_bundle.predict_mass(opening_mm=row[0], speed_r_min=row[1])
+            for row in self.forward_inputs
+        ]
+        expected = self.reference_df["KAN_pred"].to_numpy(dtype=float)
+        np.testing.assert_allclose(predicted, expected, atol=1e-4, rtol=1e-5)
