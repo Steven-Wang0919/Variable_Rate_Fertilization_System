@@ -4,10 +4,13 @@ import unittest
 from pathlib import Path
 from tkinter import TclError
 
+import matplotlib.pyplot as plt
+
 from vrf_system.annotations import OUT_OF_FIELD_TEXT, format_row_annotation
 from vrf_system.domain import Bounds, MachineConfig, PrescriptionCell, RowDecision, SimulationFrame, SimulationResult
 from vrf_system.prescription import PrescriptionMap
 from vrf_system.ui import FertilizerApp
+from vrf_system.visualization import create_current_preview_state, create_overview_preview_state
 
 
 def build_sample_prescription_map() -> PrescriptionMap:
@@ -148,6 +151,16 @@ def build_sample_result() -> SimulationResult:
     )
 
 
+def visible_annotation_texts(annotation_artists: list[object]) -> list[str]:
+    return [artist.get_text() for artist in annotation_artists if artist.get_visible()]
+
+
+def sidebar_axes(figure: object, main_ax: object) -> tuple[list[object], list[object]]:
+    legend_axes = [ax for ax in figure.axes if ax is not main_ax and ax.get_legend() is not None]
+    colorbar_axes = [ax for ax in figure.axes if ax is not main_ax and bool(ax.get_ylabel())]
+    return legend_axes, colorbar_axes
+
+
 class UISmokeTests(unittest.TestCase):
     def create_app(self) -> FertilizerApp:
         try:
@@ -190,7 +203,33 @@ class UISmokeTests(unittest.TestCase):
         self.assertIn("运行仿真后可查看当前帧细节", app.preview_status_vars["current"].get())
         app.destroy()
 
-    def test_slider_change_should_live_update_frame_info_and_release_should_refresh_table(self) -> None:
+    def test_overview_preview_should_render_annotations_for_current_frame(self) -> None:
+        result = build_sample_result()
+        renderer = create_overview_preview_state(result, frame_index=0)
+
+        self.assertEqual(
+            visible_annotation_texts(renderer.annotation_artists),
+            [format_row_annotation(decision) for decision in result.frames[0].row_decisions],
+        )
+
+        plt.close(renderer.figure)
+
+    def test_overview_preview_should_place_legend_and_colorbar_in_right_sidebar(self) -> None:
+        result = build_sample_result()
+        renderer = create_overview_preview_state(result, frame_index=0)
+        renderer.figure.canvas.draw()
+
+        legend_axes, colorbar_axes = sidebar_axes(renderer.figure, renderer.ax)
+        self.assertEqual(len(legend_axes), 1)
+        self.assertEqual(len(colorbar_axes), 1)
+        self.assertEqual(len(renderer.figure.axes), 3)
+        self.assertIsNone(renderer.ax.get_legend())
+        self.assertGreater(legend_axes[0].get_position().x0, renderer.ax.get_position().x1)
+        self.assertGreater(colorbar_axes[0].get_position().x0, renderer.ax.get_position().x1)
+
+        plt.close(renderer.figure)
+
+    def test_slider_change_should_live_update_overview_annotations_and_release_should_refresh_table(self) -> None:
         app = self.create_app()
         prescription = build_sample_prescription_map()
         result = build_sample_result()
@@ -205,20 +244,31 @@ class UISmokeTests(unittest.TestCase):
         app.update_idletasks()
         overview_canvas = app.preview_canvases["overview"]
         current_canvas = app.preview_canvases["current"]
+        overview_renderer = app.preview_renderers["overview"]
 
         self.assertEqual(app.current_frame_index, 0)
         self.assertEqual(len(app.decision_table.get_children()), 2)
         self.assertEqual(sorted(app.preview_canvases.keys()), ["current", "legend", "overview"])
+        self.assertEqual(
+            visible_annotation_texts(overview_renderer.annotation_artists),
+            [format_row_annotation(decision) for decision in result.frames[0].row_decisions],
+        )
 
         app.frame_slider.set(1)
         app._on_slider_changed("1")
+        app._process_live_preview_update()
         app.update_idletasks()
 
         self.assertEqual(app.current_frame_index, 1)
         self.assertIn("500 ms", app.frame_info_var.get())
         self.assertEqual(len(app.decision_table.get_children()), len(result.frames[0].row_decisions))
         self.assertTrue(app._table_dirty)
-        self.assertEqual(app._pending_live_frame_index, 1)
+        self.assertIsNone(app._pending_live_frame_index)
+        self.assertEqual(overview_renderer.rendered_frame_index, 1)
+        self.assertEqual(
+            visible_annotation_texts(overview_renderer.annotation_artists),
+            [format_row_annotation(decision) for decision in result.frames[1].row_decisions],
+        )
 
         app._on_slider_released(None)  # type: ignore[arg-type]
         app.update_idletasks()
@@ -229,6 +279,7 @@ class UISmokeTests(unittest.TestCase):
         self.assertEqual(sorted(app.preview_canvases.keys()), ["current", "legend", "overview"])
         self.assertIs(app.preview_canvases["overview"], overview_canvas)
         self.assertIs(app.preview_canvases["current"], current_canvas)
+        self.assertIs(app.preview_renderers["overview"], overview_renderer)
         app.destroy()
 
     def test_switching_to_dirty_current_tab_should_render_detailed_final_frame(self) -> None:
@@ -258,6 +309,32 @@ class UISmokeTests(unittest.TestCase):
         self.assertTrue(current_renderer.detailed)
         self.assertNotIn("current", app.preview_dirty_keys)
         app.destroy()
+
+    def test_current_preview_should_place_legend_and_colorbar_in_right_sidebar(self) -> None:
+        result = build_sample_result()
+        renderer = create_current_preview_state(result, frame_index=0, detailed=True)
+        renderer.figure.canvas.draw()
+
+        legend_axes, colorbar_axes = sidebar_axes(renderer.figure, renderer.ax)
+        self.assertEqual(len(legend_axes), 1)
+        self.assertEqual(len(colorbar_axes), 1)
+        self.assertEqual(len(renderer.figure.axes), 3)
+        self.assertIsNone(renderer.ax.get_legend())
+        self.assertGreater(legend_axes[0].get_position().x0, renderer.ax.get_position().x1)
+        self.assertGreater(colorbar_axes[0].get_position().x0, renderer.ax.get_position().x1)
+
+        plt.close(renderer.figure)
+
+    def test_overview_export_state_should_include_annotations_for_selected_frame(self) -> None:
+        result = build_sample_result()
+        renderer = create_overview_preview_state(result, frame_index=1)
+
+        self.assertEqual(
+            visible_annotation_texts(renderer.annotation_artists),
+            [format_row_annotation(decision) for decision in result.frames[1].row_decisions],
+        )
+
+        plt.close(renderer.figure)
 
     def test_out_of_field_label_should_use_status_text(self) -> None:
         decision = RowDecision(

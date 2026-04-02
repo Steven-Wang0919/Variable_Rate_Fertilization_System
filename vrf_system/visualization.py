@@ -41,6 +41,7 @@ class OverviewPreviewState:
     kan_artist: object
     mlp_artist: object
     out_artist: object
+    annotation_artists: list[object]
     rendered_frame_index: int = 0
 
     def update_frame(self, frame_index: int) -> None:
@@ -60,7 +61,29 @@ class OverviewPreviewState:
         self.kan_artist.set_offsets(_points_array(kan_points))
         self.mlp_artist.set_offsets(_points_array(mlp_points))
         self.out_artist.set_offsets(_points_array(out_points))
+        self._update_annotations(frame)
         self.rendered_frame_index = index
+
+    def _update_annotations(self, frame: SimulationFrame) -> None:
+        xlim = tuple(float(value) for value in self.ax.get_xlim())
+        ylim = tuple(float(value) for value in self.ax.get_ylim())
+
+        for annotation, decision in zip(self.annotation_artists, frame.row_decisions):
+            label_x, label_y, ha, va = _overview_annotation_position(
+                decision,
+                row_spacing_m=self.result.machine_config.row_spacing_m,
+                xlim=xlim,
+                ylim=ylim,
+            )
+            annotation.set_position((label_x, label_y))
+            annotation.set_text(format_row_annotation(decision))
+            annotation.set_color(_decision_color(decision))
+            annotation.set_ha(ha)
+            annotation.set_va(va)
+            annotation.set_visible(True)
+
+        for annotation in self.annotation_artists[len(frame.row_decisions) :]:
+            annotation.set_visible(False)
 
 
 @dataclass(slots=True)
@@ -283,6 +306,24 @@ def _draw_cells_with_handles(ax, cells: list[PrescriptionCell], norm: mcolors.No
     return patches, labels
 
 
+def _create_annotation_artists(ax, count: int, *, font_size: float) -> list[object]:
+    return [
+        ax.text(
+            0.0,
+            0.0,
+            "",
+            fontsize=font_size,
+            color="#0f172a",
+            ha="left",
+            va="bottom",
+            visible=False,
+            bbox={"boxstyle": "round,pad=0.2", "facecolor": "#f8fafc", "edgecolor": "none", "alpha": 0.9},
+            zorder=7,
+        )
+        for _ in range(count)
+    ]
+
+
 def _draw_trajectories(ax, result: SimulationResult) -> None:
     pass_points: dict[int, list[tuple[float, float]]] = {}
     for frame in result.frames:
@@ -334,6 +375,47 @@ def _annotation_position(
     return label_x, label_y, ha, va
 
 
+def _overview_annotation_position(
+    decision,
+    *,
+    row_spacing_m: float,
+    xlim: tuple[float, float],
+    ylim: tuple[float, float],
+) -> tuple[float, float, str, str]:
+    x_span = max(xlim[1] - xlim[0], row_spacing_m * 6, 1.0)
+    y_span = max(ylim[1] - ylim[0], row_spacing_m * 4, 1.0)
+    horizontal_gap = max(row_spacing_m * 0.32, x_span * 0.018, 0.18)
+    vertical_gap = max(row_spacing_m * 0.16, y_span * 0.028, 0.12)
+
+    if decision.x_m <= xlim[0] + horizontal_gap * 1.5:
+        label_x = decision.x_m + horizontal_gap
+        ha = "left"
+    elif decision.x_m >= xlim[1] - horizontal_gap * 1.5:
+        label_x = decision.x_m - horizontal_gap
+        ha = "right"
+    elif decision.row_index % 2 == 0:
+        label_x = decision.x_m + horizontal_gap
+        ha = "left"
+    else:
+        label_x = decision.x_m - horizontal_gap
+        ha = "right"
+
+    if decision.y_m <= ylim[0] + vertical_gap * 1.8:
+        label_y = decision.y_m + vertical_gap
+        va = "bottom"
+    elif decision.y_m >= ylim[1] - vertical_gap * 1.8:
+        label_y = decision.y_m - vertical_gap
+        va = "top"
+    elif decision.row_index % 2 == 0:
+        label_y = decision.y_m + vertical_gap
+        va = "bottom"
+    else:
+        label_y = decision.y_m - vertical_gap
+        va = "top"
+
+    return label_x, label_y, ha, va
+
+
 def _set_axes_style(ax, xlim: tuple[float, float], ylim: tuple[float, float], title: str) -> None:
     ax.set_xlim(*xlim)
     ax.set_ylim(*ylim)
@@ -344,14 +426,42 @@ def _set_axes_style(ax, xlim: tuple[float, float], ylim: tuple[float, float], ti
     ax.grid(True, linestyle="--", linewidth=0.5, alpha=0.35)
 
 
-def _add_colorbar(fig, ax, norm: mcolors.Normalize) -> None:
+def _create_preview_figure_layout(
+    *,
+    figsize: tuple[float, float],
+    dpi: int,
+    top: float,
+    bottom: float,
+) -> tuple[object, object, object, object]:
+    fig = plt.figure(figsize=figsize, dpi=dpi)
+    outer = fig.add_gridspec(
+        1,
+        2,
+        width_ratios=[1.0, 0.22],
+        left=0.08,
+        right=0.96,
+        top=top,
+        bottom=bottom,
+        wspace=0.14,
+    )
+    ax = fig.add_subplot(outer[0, 0])
+    sidebar = outer[0, 1].subgridspec(2, 1, height_ratios=[0.34, 0.66], hspace=0.10)
+    legend_ax = fig.add_subplot(sidebar[0, 0])
+    colorbar_ax = fig.add_subplot(sidebar[1, 0])
+    legend_ax.axis("off")
+    return fig, ax, legend_ax, colorbar_ax
+
+
+def _add_colorbar(fig, cax, norm: mcolors.Normalize) -> None:
     sm = cm.ScalarMappable(norm=norm, cmap=MAP_CMAP)
     sm.set_array([])
-    cbar = fig.colorbar(sm, ax=ax, fraction=0.035, pad=0.02)
+    cbar = fig.colorbar(sm, cax=cax)
+    cbar.ax.yaxis.set_label_position("right")
+    cbar.ax.yaxis.tick_right()
     cbar.set_label("目标施肥量 (kg/ha)")
 
 
-def _add_marker_legend(ax) -> None:
+def _add_marker_legend(legend_ax) -> None:
     handles = [
         Line2D([0], [0], color=PATH_COLOR, lw=1.5, alpha=0.5, label="机器轨迹"),
         Line2D([0], [0], color=SPAN_COLOR, lw=2.2, label="当前机器跨排行线"),
@@ -360,14 +470,20 @@ def _add_marker_legend(ax) -> None:
         Line2D([0], [0], marker="s", color=MLP_COLOR, linestyle="", markersize=7, label="MLP 外推点"),
         Line2D([0], [0], marker="x", color=OUT_COLOR, linestyle="", markersize=7, label="地块外排点"),
     ]
-    ax.legend(handles=handles, loc="upper right", frameon=True, fontsize=8)
+    legend_ax.axis("off")
+    legend_ax.legend(handles=handles, loc="upper left", frameon=True, fontsize=8, borderaxespad=0.0)
 
 
 def create_overview_preview_state(result: SimulationResult, frame_index: int = 0) -> OverviewPreviewState:
     cells = list(result.prescription_cells)
     xlim, ylim, norm = _prescription_extent(cells)
 
-    fig, ax = plt.subplots(figsize=(11.5, 8.2), dpi=160)
+    fig, ax, legend_ax, colorbar_ax = _create_preview_figure_layout(
+        figsize=(11.5, 8.2),
+        dpi=160,
+        top=0.92,
+        bottom=0.10,
+    )
     _draw_cells(ax, cells, norm, show_labels=len(cells) <= 30)
     _draw_trajectories(ax, result)
     span_artist, = ax.plot([], [], color=SPAN_COLOR, linewidth=2.2, alpha=0.85, zorder=4)
@@ -375,10 +491,11 @@ def create_overview_preview_state(result: SimulationResult, frame_index: int = 0
     kan_artist = ax.scatter([], [], color=KAN_COLOR, marker="o", s=36, zorder=6)
     mlp_artist = ax.scatter([], [], color=MLP_COLOR, marker="s", s=36, zorder=6)
     out_artist = ax.scatter([], [], color=OUT_COLOR, marker="x", s=28, zorder=5)
+    max_row_count = max((len(frame.row_decisions) for frame in result.frames), default=0)
+    annotation_artists = _create_annotation_artists(ax, max_row_count, font_size=6.5)
     _set_axes_style(ax, xlim, ylim, "变量施肥作业地图总览")
-    _add_colorbar(fig, ax, norm)
-    _add_marker_legend(ax)
-    fig.subplots_adjust(left=0.08, right=0.88, top=0.92, bottom=0.10)
+    _add_colorbar(fig, colorbar_ax, norm)
+    _add_marker_legend(legend_ax)
 
     state = OverviewPreviewState(
         result=result,
@@ -389,6 +506,7 @@ def create_overview_preview_state(result: SimulationResult, frame_index: int = 0
         kan_artist=kan_artist,
         mlp_artist=mlp_artist,
         out_artist=out_artist,
+        annotation_artists=annotation_artists,
     )
     state.update_frame(frame_index)
     return state
@@ -403,7 +521,12 @@ def create_current_preview_state(
     cells = list(result.prescription_cells)
     norm = _norm_from_cells(cells)
 
-    fig, ax = plt.subplots(figsize=(10.5, 7.2), dpi=170)
+    fig, ax, legend_ax, colorbar_ax = _create_preview_figure_layout(
+        figsize=(10.5, 7.2),
+        dpi=170,
+        top=0.90,
+        bottom=0.10,
+    )
     cell_patches, cell_labels = _draw_cells_with_handles(ax, cells, norm)
     _draw_trajectories(ax, result)
     span_artist, = ax.plot([], [], color=SPAN_COLOR, linewidth=2.2, alpha=0.85, zorder=4)
@@ -413,26 +536,11 @@ def create_current_preview_state(
     out_artist = ax.scatter([], [], color=OUT_COLOR, marker="x", s=28, zorder=5)
 
     max_row_count = max((len(frame.row_decisions) for frame in result.frames), default=0)
-    annotation_artists = [
-        ax.text(
-            0.0,
-            0.0,
-            "",
-            fontsize=7,
-            color="#0f172a",
-            ha="left",
-            va="bottom",
-            visible=False,
-            bbox={"boxstyle": "round,pad=0.2", "facecolor": "#f8fafc", "edgecolor": "none", "alpha": 0.9},
-            zorder=7,
-        )
-        for _ in range(max_row_count)
-    ]
+    annotation_artists = _create_annotation_artists(ax, max_row_count, font_size=7)
 
     _set_axes_style(ax, (0.0, 1.0), (0.0, 1.0), "当前时刻地图细节图")
-    _add_colorbar(fig, ax, norm)
-    _add_marker_legend(ax)
-    fig.subplots_adjust(left=0.08, right=0.88, top=0.90, bottom=0.10)
+    _add_colorbar(fig, colorbar_ax, norm)
+    _add_marker_legend(legend_ax)
 
     state = CurrentFramePreviewState(
         result=result,
@@ -504,8 +612,9 @@ def create_prescription_overview_figure(prescription: PrescriptionMap):
     fig, ax = plt.subplots(figsize=(11.5, 8.2), dpi=160)
     _draw_cells(ax, cells, norm, show_labels=len(cells) <= 30)
     _set_axes_style(ax, xlim, ylim, "处方图总览")
-    _add_colorbar(fig, ax, norm)
     fig.subplots_adjust(left=0.08, right=0.88, top=0.92, bottom=0.10)
+    cax = fig.add_axes([0.90, 0.10, 0.03, 0.82])
+    _add_colorbar(fig, cax, norm)
     return fig
 
 
