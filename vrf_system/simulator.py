@@ -5,6 +5,7 @@ from collections import Counter
 from .domain import MachineConfig, SimulationFrame, SimulationResult
 from .engine import ModelRouter, build_row_decision, target_mass_from_rate
 from .prescription import PrescriptionMap
+from .routing_spec import EXPERIMENTAL_EXTRAPOLATION, IN_FIELD, OUT_OF_FIELD
 
 
 class FieldSimulator:
@@ -18,7 +19,7 @@ class FieldSimulator:
         max_offset = max(row_offsets)
         pass_spacing = float(machine_config.row_count) * float(machine_config.row_spacing_m)
         if pass_spacing <= 0:
-            raise ValueError("机具作业幅宽必须大于 0。")
+            raise ValueError("机器作业幅宽必须大于 0。")
 
         center_y = prescription_map.bounds.min_y - min_offset
         pass_centers: list[float] = []
@@ -62,11 +63,15 @@ class FieldSimulator:
                                 zone_id="",
                                 target_rate_kg_ha=0.0,
                                 target_mass_g_min=0.0,
-                                strategy_opening_mm=0.0,
-                                target_speed_r_min=0.0,
-                                selected_model="none",
-                                domain_status="out_of_field",
-                                status="out_of_field",
+                                row_state=OUT_OF_FIELD,
+                                opening_mm=0.0,
+                                raw_speed_r_min=0.0,
+                                speed_r_min_cmd=0.0,
+                                model_route="",
+                                mass_state="",
+                                route_mode="",
+                                speed_clip_state="",
+                                confidence_level="",
                             )
                         )
                         continue
@@ -77,10 +82,15 @@ class FieldSimulator:
                         machine_config.travel_speed_kmh,
                     )
                     strategy_opening = self.router.select_strategy_opening(target_mass)
-                    target_speed, selected_model, domain_status, status = self.router.predict(
-                        target_mass,
-                        strategy_opening,
-                    )
+                    (
+                        raw_speed_r_min,
+                        speed_r_min_cmd,
+                        model_route,
+                        mass_state,
+                        route_mode,
+                        speed_clip_state,
+                        confidence_level,
+                    ) = self.router.predict(target_mass, strategy_opening)
                     row_decisions.append(
                         build_row_decision(
                             timestamp_ms=timestamp_ms,
@@ -91,11 +101,15 @@ class FieldSimulator:
                             zone_id=cell.zone_id,
                             target_rate_kg_ha=cell.target_rate_kg_ha,
                             target_mass_g_min=target_mass,
-                            strategy_opening_mm=strategy_opening,
-                            target_speed_r_min=target_speed,
-                            selected_model=selected_model,
-                            domain_status=domain_status,
-                            status=status,
+                            row_state=IN_FIELD,
+                            opening_mm=strategy_opening,
+                            raw_speed_r_min=raw_speed_r_min,
+                            speed_r_min_cmd=speed_r_min_cmd,
+                            model_route=model_route,
+                            mass_state=mass_state,
+                            route_mode=route_mode,
+                            speed_clip_state=speed_clip_state,
+                            confidence_level=confidence_level,
                         )
                     )
                 frames.append(
@@ -138,16 +152,30 @@ class FieldSimulator:
         machine_config: MachineConfig,
     ) -> dict[str, object]:
         decisions = [decision for frame in frames for decision in frame.row_decisions]
-        status_counts = Counter(decision.status for decision in decisions)
-        model_counts = Counter(decision.selected_model for decision in decisions if decision.selected_model != "none")
-        domain_counts = Counter(decision.domain_status for decision in decisions)
-        valid = [decision for decision in decisions if decision.status == "ok"]
-        avg_rate = sum(item.target_rate_kg_ha for item in valid) / len(valid) if valid else 0.0
-        avg_speed = sum(item.target_speed_r_min for item in valid) / len(valid) if valid else 0.0
+        in_field_decisions = [decision for decision in decisions if decision.row_state == IN_FIELD]
+        row_state_counts = Counter(decision.row_state for decision in decisions)
+        model_route_counts = Counter(decision.model_route for decision in in_field_decisions)
+        mass_state_counts = Counter(decision.mass_state for decision in in_field_decisions)
+        route_mode_counts = Counter(decision.route_mode for decision in in_field_decisions)
+        speed_clip_state_counts = Counter(decision.speed_clip_state for decision in in_field_decisions)
+        confidence_level_counts = Counter(decision.confidence_level for decision in in_field_decisions)
+        avg_rate = (
+            sum(item.target_rate_kg_ha for item in in_field_decisions) / len(in_field_decisions)
+            if in_field_decisions
+            else 0.0
+        )
+        avg_speed_cmd = (
+            sum(item.speed_r_min_cmd for item in in_field_decisions) / len(in_field_decisions)
+            if in_field_decisions
+            else 0.0
+        )
+        avg_raw_speed = (
+            sum(item.raw_speed_r_min for item in in_field_decisions) / len(in_field_decisions)
+            if in_field_decisions
+            else 0.0
+        )
         extrapolation_count = sum(
-            1
-            for item in decisions
-            if item.selected_model == "inverse_MLP" and item.domain_status != "in_domain"
+            1 for item in in_field_decisions if item.route_mode == EXPERIMENTAL_EXTRAPOLATION
         )
         return {
             "frame_count": len(frames),
@@ -155,10 +183,14 @@ class FieldSimulator:
             "total_row_decisions": len(decisions),
             "machine_config": machine_config.to_dict(),
             "prescription_bounds": prescription_map.bounds.to_dict(),
-            "status_counts": dict(status_counts),
-            "selected_model_counts": dict(model_counts),
-            "domain_status_counts": dict(domain_counts),
+            "row_state_counts": dict(row_state_counts),
+            "model_route_counts": dict(model_route_counts),
+            "mass_state_counts": dict(mass_state_counts),
+            "route_mode_counts": dict(route_mode_counts),
+            "speed_clip_state_counts": dict(speed_clip_state_counts),
+            "confidence_level_counts": dict(confidence_level_counts),
             "average_target_rate_kg_ha": round(avg_rate, 4),
-            "average_target_speed_r_min": round(avg_speed, 4),
-            "extrapolation_count": extrapolation_count,
+            "average_speed_r_min_cmd": round(avg_speed_cmd, 4),
+            "average_raw_speed_r_min": round(avg_raw_speed, 4),
+            "experimental_extrapolation_count": extrapolation_count,
         }

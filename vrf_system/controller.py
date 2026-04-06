@@ -9,29 +9,17 @@ from .exporters import export_simulation_result
 from .model_runtime import (
     ModelArtifactError,
     ModelBundle,
-    build_default_forward_model_config,
+    build_default_forward_model_configs,
     build_default_model_configs,
     bundle_config_from_artifact_dir,
     load_model_bundle,
 )
 from .prescription import PrescriptionMap
+from .routing_spec import FORWARD_KAN, forward_route_for
 from .simulator import FieldSimulator
 
 
 MASS_PER_RATE_FACTOR = 1.6666667
-
-
-def _forward_domain_status(bundle: ModelBundle, opening_mm: float, speed_r_min: float) -> str:
-    domain = bundle.training_domain
-    opening_in_domain = float(domain["opening_min"]) <= float(opening_mm) <= float(domain["opening_max"])
-    speed_in_domain = float(domain["speed_min"]) <= float(speed_r_min) <= float(domain["speed_max"])
-    if opening_in_domain and speed_in_domain:
-        return "in_domain"
-    if not opening_in_domain and speed_in_domain:
-        return "opening_extrapolation"
-    if opening_in_domain and not speed_in_domain:
-        return "speed_extrapolation"
-    return "opening_and_speed_extrapolation"
 
 
 def _equivalent_rate_kg_ha(
@@ -54,6 +42,7 @@ class SimulationController:
         self.kan_bundle: ModelBundle | None = None
         self.mlp_bundle: ModelBundle | None = None
         self.forward_kan_bundle: ModelBundle | None = None
+        self.forward_mlp_bundle: ModelBundle | None = None
         self.router: ModelRouter | None = None
         self.prescription_map: PrescriptionMap | None = None
         self.last_result = None
@@ -74,16 +63,38 @@ class SimulationController:
         self.router = ModelRouter(self.kan_bundle, self.mlp_bundle)
         return self.kan_bundle, self.mlp_bundle
 
+    def load_default_forward_models(self) -> tuple[ModelBundle, ModelBundle]:
+        kan_config, mlp_config = build_default_forward_model_configs()
+        return self.load_forward_models(kan_config, mlp_config)
+
+    def _default_forward_mlp_config(self):
+        _, mlp_config = build_default_forward_model_configs()
+        return mlp_config
+
     def load_default_forward_model(self) -> ModelBundle:
-        return self.load_forward_model(build_default_forward_model_config())
+        return self.load_default_forward_models()[0]
+
+    def load_forward_models_from_dirs(
+        self,
+        forward_kan_dir: str | Path,
+        forward_mlp_dir: str | Path,
+    ) -> tuple[ModelBundle, ModelBundle]:
+        forward_kan_config = bundle_config_from_artifact_dir("forward_KAN", "forward_KAN", forward_kan_dir)
+        forward_mlp_config = bundle_config_from_artifact_dir("forward_MLP", "forward_MLP", forward_mlp_dir)
+        return self.load_forward_models(forward_kan_config, forward_mlp_config)
 
     def load_forward_model_from_dir(self, forward_kan_dir: str | Path) -> ModelBundle:
         forward_config = bundle_config_from_artifact_dir("forward_KAN", "forward_KAN", forward_kan_dir)
         return self.load_forward_model(forward_config)
 
     def load_forward_model(self, forward_config) -> ModelBundle:
-        self.forward_kan_bundle = load_model_bundle(forward_config)
-        return self.forward_kan_bundle
+        forward_bundle, _ = self.load_forward_models(forward_config, self._default_forward_mlp_config())
+        return forward_bundle
+
+    def load_forward_models(self, forward_kan_config, forward_mlp_config) -> tuple[ModelBundle, ModelBundle]:
+        self.forward_kan_bundle = load_model_bundle(forward_kan_config)
+        self.forward_mlp_bundle = load_model_bundle(forward_mlp_config)
+        return self.forward_kan_bundle, self.forward_mlp_bundle
 
     def load_prescription(self, csv_path: str | Path) -> PrescriptionMap:
         self.prescription_map = PrescriptionMap.from_csv(csv_path)
@@ -94,7 +105,7 @@ class SimulationController:
 
     def run_simulation(self, machine_config: MachineConfig | None = None):
         if self.router is None:
-            raise ModelArtifactError("请先加载 KAN 与 MLP 模型包。")
+            raise ModelArtifactError("请先加载 inverse_KAN 和 inverse_MLP 模型包。")
         if self.prescription_map is None:
             raise ValueError("请先导入处方图。")
         config = machine_config or MachineConfig()
@@ -110,16 +121,16 @@ class SimulationController:
         row_spacing_m: float | None = None,
         travel_speed_kmh: float | None = None,
     ) -> ForwardPredictionResult:
-        if self.forward_kan_bundle is None:
-            raise ModelArtifactError("请先加载前向 KAN 预测模型。")
+        if self.forward_kan_bundle is None or self.forward_mlp_bundle is None:
+            raise ModelArtifactError("请先加载前向 KAN 和 MLP 预测模型。")
 
-        domain_status = _forward_domain_status(self.forward_kan_bundle, opening_mm, speed_r_min)
-        predicted_mass = float(self.forward_kan_bundle.predict_mass(opening_mm, speed_r_min))
-        status = "ok"
-        if predicted_mass < 0:
-            predicted_mass = 0.0
-            status = "clamped_low"
-
+        route = forward_route_for(opening_mm, speed_r_min)
+        selected_bundle = (
+            self.forward_kan_bundle
+            if route.model_route == FORWARD_KAN
+            else self.forward_mlp_bundle
+        )
+        predicted_mass = float(selected_bundle.predict_mass(opening_mm, speed_r_min))
         equivalent_rate = _equivalent_rate_kg_ha(
             predicted_mass,
             row_spacing_m=row_spacing_m,
@@ -128,11 +139,13 @@ class SimulationController:
         self.last_forward_prediction = ForwardPredictionResult(
             opening_mm=float(opening_mm),
             speed_r_min=float(speed_r_min),
-            predicted_mass_g_min=float(predicted_mass),
+            mass_hat_g_min=float(predicted_mass),
             equivalent_rate_kg_ha=equivalent_rate,
-            selected_model=self.forward_kan_bundle.config.name,
-            domain_status=domain_status,
-            status=status,
+            model_route=route.model_route,
+            opening_state=route.opening_state,
+            speed_state=route.speed_state,
+            route_mode=route.route_mode,
+            confidence_level=route.confidence_level,
         )
         return self.last_forward_prediction
 

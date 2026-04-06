@@ -29,6 +29,7 @@ class RuntimePaths:
     default_mlp_artifact_dir: Path
     default_canonical_predictions: Path
     default_forward_kan_artifact_dir: Path
+    default_forward_mlp_artifact_dir: Path
     default_forward_canonical_predictions: Path
     default_sample_prescription: Path
     default_output_root: Path
@@ -82,6 +83,10 @@ def resolve_runtime_paths(
         packaged_artifacts_root / "forward_KAN",
         default_compare_run / "artifacts" / "forward" / "KAN",
     )
+    default_forward_mlp_artifact_dir = _first_existing_path(
+        packaged_artifacts_root / "forward_MLP",
+        default_compare_run / "artifacts" / "forward" / "MLP",
+    )
     default_canonical_predictions = default_compare_run / "inverse_model_predictions_all.csv"
     default_forward_canonical_predictions = default_compare_run / "forward_model_predictions.csv"
     default_sample_prescription = _first_existing_path(
@@ -101,6 +106,7 @@ def resolve_runtime_paths(
         default_mlp_artifact_dir=default_mlp_artifact_dir,
         default_canonical_predictions=default_canonical_predictions,
         default_forward_kan_artifact_dir=default_forward_kan_artifact_dir,
+        default_forward_mlp_artifact_dir=default_forward_mlp_artifact_dir,
         default_forward_canonical_predictions=default_forward_canonical_predictions,
         default_sample_prescription=default_sample_prescription,
         default_output_root=default_output_root,
@@ -118,6 +124,7 @@ DEFAULT_COMPARE_RUN = RUNTIME_PATHS.default_compare_run
 DEFAULT_KAN_ARTIFACT_DIR = RUNTIME_PATHS.default_kan_artifact_dir
 DEFAULT_MLP_ARTIFACT_DIR = RUNTIME_PATHS.default_mlp_artifact_dir
 DEFAULT_FORWARD_KAN_ARTIFACT_DIR = RUNTIME_PATHS.default_forward_kan_artifact_dir
+DEFAULT_FORWARD_MLP_ARTIFACT_DIR = RUNTIME_PATHS.default_forward_mlp_artifact_dir
 DEFAULT_INVERSE_CANONICAL_PREDICTIONS = RUNTIME_PATHS.default_canonical_predictions
 DEFAULT_CANONICAL_PREDICTIONS = RUNTIME_PATHS.default_canonical_predictions
 DEFAULT_FORWARD_CANONICAL_PREDICTIONS = RUNTIME_PATHS.default_forward_canonical_predictions

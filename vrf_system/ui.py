@@ -16,12 +16,14 @@ except ImportError:  # pragma: no cover - optional dependency fallback
 from .controller import SimulationController
 from .defaults import (
     DEFAULT_FORWARD_KAN_ARTIFACT_DIR,
+    DEFAULT_FORWARD_MLP_ARTIFACT_DIR,
     DEFAULT_KAN_ARTIFACT_DIR,
     DEFAULT_MLP_ARTIFACT_DIR,
     DEFAULT_OUTPUT_ROOT,
     DEFAULT_SAMPLE_PRESCRIPTION,
 )
 from .domain import ForwardPredictionResult, MachineConfig
+from .routing_spec import IN_FIELD
 from .visualization import (
     CurrentFramePreviewState,
     OverviewPreviewState,
@@ -77,6 +79,7 @@ class FertilizerApp(tk.Tk):
         self.kan_dir_var = tk.StringVar(value=str(DEFAULT_KAN_ARTIFACT_DIR))
         self.mlp_dir_var = tk.StringVar(value=str(DEFAULT_MLP_ARTIFACT_DIR))
         self.forward_kan_dir_var = tk.StringVar(value=str(DEFAULT_FORWARD_KAN_ARTIFACT_DIR))
+        self.forward_mlp_dir_var = tk.StringVar(value=str(DEFAULT_FORWARD_MLP_ARTIFACT_DIR))
         self.prescription_path_var = tk.StringVar(value=str(DEFAULT_SAMPLE_PRESCRIPTION))
         self.output_root_var = tk.StringVar(value=str(DEFAULT_OUTPUT_ROOT))
         self.row_count_var = tk.StringVar(value="6")
@@ -132,6 +135,7 @@ class FertilizerApp(tk.Tk):
 
         self._configure_styles()
         self._build_layout()
+        self._configure_decision_table_spec()
         self._set_result_state(has_result=False)
         self._render_preview_tabs(force=True)
 
@@ -200,7 +204,7 @@ class FertilizerApp(tk.Tk):
         self.left_form_content.bind("<Configure>", self._on_left_form_content_configure)
         self.left_form_canvas.bind("<Configure>", self._on_left_form_canvas_configure)
 
-        self._build_left_form_content(self.left_form_content)
+        self._build_left_form_content_spec(self.left_form_content)
         self._bind_left_form_mousewheel_widgets(self.left_form_content)
         self.after_idle(self._refresh_left_form_scrollregion)
 
@@ -211,6 +215,121 @@ class FertilizerApp(tk.Tk):
         self.log_text = scrolledtext.ScrolledText(self.left_log_box, height=12, wrap=tk.WORD, borderwidth=0, relief=tk.FLAT)
         self.log_text.grid(row=0, column=0, sticky="nsew")
         self.log_text.configure(state=tk.DISABLED)
+
+    def _build_left_form_content_spec(self, parent: ttk.Frame) -> None:
+        model_box = ttk.LabelFrame(parent, text="模型管理", padding=12)
+        model_box.pack(fill=tk.X, pady=(0, 12))
+        ttk.Label(model_box, text="inverse_KAN 模型目录").pack(anchor=tk.W)
+        ttk.Entry(model_box, textvariable=self.kan_dir_var).pack(fill=tk.X, pady=(4, 8))
+        ttk.Button(model_box, text="选择 inverse_KAN 目录", command=self._choose_kan_dir, style="Secondary.TButton").pack(fill=tk.X)
+        ttk.Label(model_box, text="inverse_MLP 模型目录").pack(anchor=tk.W, pady=(12, 0))
+        ttk.Entry(model_box, textvariable=self.mlp_dir_var).pack(fill=tk.X, pady=(4, 8))
+        ttk.Button(model_box, text="选择 inverse_MLP 目录", command=self._choose_mlp_dir, style="Secondary.TButton").pack(fill=tk.X)
+        ttk.Button(
+            model_box,
+            text="按当前目录加载模型",
+            command=self._load_models_from_current_inputs,
+            style="Secondary.TButton",
+        ).pack(fill=tk.X, pady=(10, 0))
+        ttk.Button(
+            model_box,
+            text="恢复默认模型目录",
+            command=self._load_default_models,
+            style="Secondary.TButton",
+        ).pack(fill=tk.X, pady=(8, 0))
+
+        forward_prediction_box = ttk.LabelFrame(parent, text="前向预测", padding=12)
+        forward_prediction_box.pack(fill=tk.X, pady=(0, 12))
+        ttk.Label(forward_prediction_box, text="forward_KAN 模型目录").pack(anchor=tk.W)
+        ttk.Entry(forward_prediction_box, textvariable=self.forward_kan_dir_var).pack(fill=tk.X, pady=(4, 8))
+        ttk.Button(
+            forward_prediction_box,
+            text="选择 forward_KAN 目录",
+            command=self._choose_forward_kan_dir,
+            style="Secondary.TButton",
+        ).pack(fill=tk.X)
+        ttk.Label(forward_prediction_box, text="forward_MLP 模型目录").pack(anchor=tk.W, pady=(12, 0))
+        ttk.Entry(forward_prediction_box, textvariable=self.forward_mlp_dir_var).pack(fill=tk.X, pady=(4, 8))
+        ttk.Button(
+            forward_prediction_box,
+            text="选择 forward_MLP 目录",
+            command=self._choose_forward_mlp_dir,
+            style="Secondary.TButton",
+        ).pack(fill=tk.X)
+        ttk.Label(
+            forward_prediction_box,
+            text="前向路由按开度是否出域在 forward_KAN 与 forward_MLP 之间自动切换。",
+            style="Note.TLabel",
+            wraplength=300,
+        ).pack(anchor=tk.W, pady=(8, 8))
+        self._add_labeled_entry(forward_prediction_box, "开度 (mm)", self.forward_opening_var)
+        self._add_labeled_entry(forward_prediction_box, "转速 (r/min)", self.forward_speed_var)
+        self.forward_predict_button = ttk.Button(
+            forward_prediction_box,
+            text="执行前向预测",
+            command=self._run_forward_prediction,
+            style="Primary.TButton",
+        )
+        self.forward_predict_button.pack(fill=tk.X, pady=(8, 0))
+        tk.Label(
+            forward_prediction_box,
+            textvariable=self.forward_prediction_var,
+            wraplength=300,
+            justify=tk.LEFT,
+            bg=SURFACE_BG,
+            fg=TEXT_PRIMARY,
+            font=("Microsoft YaHei UI", 10),
+        ).pack(anchor=tk.W, pady=(10, 0))
+
+        prescription_box = ttk.LabelFrame(parent, text="处方图", padding=12)
+        prescription_box.pack(fill=tk.X, pady=(0, 12))
+        ttk.Label(prescription_box, text="处方图 CSV 路径").pack(anchor=tk.W)
+        ttk.Entry(prescription_box, textvariable=self.prescription_path_var).pack(fill=tk.X, pady=(4, 8))
+        ttk.Button(
+            prescription_box,
+            text="选择处方图 CSV",
+            command=self._choose_prescription_csv,
+            style="Secondary.TButton",
+        ).pack(fill=tk.X)
+        ttk.Button(
+            prescription_box,
+            text="加载示例处方图",
+            command=self._load_sample_prescription,
+            style="Secondary.TButton",
+        ).pack(fill=tk.X, pady=(8, 0))
+
+        machine_box = ttk.LabelFrame(parent, text="机器参数", padding=12)
+        machine_box.pack(fill=tk.X, pady=(0, 12))
+        self._add_labeled_entry(machine_box, "行数", self.row_count_var)
+        self._add_labeled_entry(machine_box, "行距 (m)", self.row_spacing_var)
+        self._add_labeled_entry(machine_box, "作业速度 (km/h)", self.travel_speed_var)
+        self._add_labeled_entry(machine_box, "采样周期 (ms)", self.sample_period_var)
+        self._add_labeled_entry(machine_box, "中心到排口偏移 (m)", self.longitudinal_offset_var)
+        self._add_labeled_entry(machine_box, "自定义排位偏移", self.row_offsets_var, note="按逗号分隔，留空则按等间距自动生成。")
+        ttk.Button(
+            machine_box,
+            text="恢复默认机器参数",
+            command=self._reset_machine_defaults,
+            style="Secondary.TButton",
+        ).pack(fill=tk.X, pady=(8, 0))
+
+        simulation_box = ttk.LabelFrame(parent, text="仿真与导出", padding=12)
+        simulation_box.pack(fill=tk.X, pady=(0, 12))
+        ttk.Label(simulation_box, text="导出根目录").pack(anchor=tk.W)
+        ttk.Entry(simulation_box, textvariable=self.output_root_var).pack(fill=tk.X, pady=(4, 8))
+        ttk.Button(
+            simulation_box,
+            text="选择导出目录",
+            command=self._choose_output_root,
+            style="Secondary.TButton",
+        ).pack(fill=tk.X)
+        ttk.Button(simulation_box, text="运行仿真", command=self._run_simulation, style="Primary.TButton").pack(fill=tk.X, pady=(10, 0))
+        ttk.Label(
+            simulation_box,
+            text="反向路由固定按质量支持域与三档开度选择 inverse_KAN / inverse_MLP，命令速度会自动裁剪到 20-60 r/min。",
+            style="Note.TLabel",
+            wraplength=300,
+        ).pack(anchor=tk.W, pady=(8, 0))
 
     def _build_left_form_content(self, parent: ttk.Frame) -> None:
         model_box = ttk.LabelFrame(parent, text="模型包管理", padding=12)
@@ -668,6 +787,14 @@ class FertilizerApp(tk.Tk):
         if path:
             self.forward_kan_dir_var.set(path)
 
+    def _choose_forward_mlp_dir(self) -> None:
+        path = filedialog.askdirectory(
+            title="选择 forward_MLP 模型目录",
+            initialdir=self.forward_mlp_dir_var.get() or str(Path.cwd()),
+        )
+        if path:
+            self.forward_mlp_dir_var.set(path)
+
     def _choose_prescription_csv(self) -> None:
         path = filedialog.askopenfilename(
             title="选择处方图 CSV",
@@ -687,6 +814,7 @@ class FertilizerApp(tk.Tk):
         self.kan_dir_var.set(str(DEFAULT_KAN_ARTIFACT_DIR))
         self.mlp_dir_var.set(str(DEFAULT_MLP_ARTIFACT_DIR))
         self.forward_kan_dir_var.set(str(DEFAULT_FORWARD_KAN_ARTIFACT_DIR))
+        self.forward_mlp_dir_var.set(str(DEFAULT_FORWARD_MLP_ARTIFACT_DIR))
         self._load_models_from_current_inputs(show_message=show_message)
 
     def _load_inverse_models_from_current_inputs(self, *, log_success: bool = True):
@@ -701,10 +829,23 @@ class FertilizerApp(tk.Tk):
             self._log(f"已加载预测模型：{forward_bundle.config.name}")
         return forward_bundle
 
+    def _load_forward_models_from_current_inputs(self, *, log_success: bool = True):
+        forward_kan_bundle, forward_mlp_bundle = self.controller.load_forward_models_from_dirs(
+            self.forward_kan_dir_var.get(),
+            self.forward_mlp_dir_var.get(),
+        )
+        if log_success:
+            self._log(
+                "已加载前向模型："
+                f"{forward_kan_bundle.config.name}、{forward_mlp_bundle.config.name}"
+            )
+        return forward_kan_bundle, forward_mlp_bundle
+
     def _load_models_from_current_inputs(self, show_message: bool = True) -> None:
         try:
             kan_bundle, mlp_bundle = self._load_inverse_models_from_current_inputs(log_success=False)
-            forward_bundle = self._load_forward_model_from_current_input(log_success=False)
+            forward_kan_bundle, forward_mlp_bundle = self._load_forward_models_from_current_inputs(log_success=False)
+            forward_bundle = forward_kan_bundle
             self._log(
                 "已加载决策模型："
                 f"{kan_bundle.config.name}、{mlp_bundle.config.name}；"
@@ -803,6 +944,80 @@ class FertilizerApp(tk.Tk):
         )
         return "\n".join(lines)
 
+    def _opening_state_text(self, opening_state: str) -> str:
+        mapping = {
+            "IN_OPENING_SUPPORT": "开度支持域内",
+            "OUT_OF_OPENING_SUPPORT": "开度支持域外",
+        }
+        return mapping.get(opening_state, opening_state)
+
+    def _speed_state_text(self, speed_state: str) -> str:
+        mapping = {
+            "BELOW_SPEED_SUPPORT": "转速低于支持域",
+            "IN_SPEED_SUPPORT": "转速支持域内",
+            "ABOVE_SPEED_SUPPORT": "转速高于支持域",
+        }
+        return mapping.get(speed_state, speed_state)
+
+    def _mass_state_text(self, mass_state: str) -> str:
+        mapping = {
+            "BELOW_GLOBAL_SUPPORT": "排肥量低于全局支持域",
+            "IN_GLOBAL_SUPPORT": "排肥量位于全局支持域",
+            "ABOVE_GLOBAL_SUPPORT": "排肥量高于全局支持域",
+            "": "-",
+        }
+        return mapping.get(mass_state, mass_state)
+
+    def _route_mode_text(self, route_mode: str) -> str:
+        mapping = {
+            "NORMAL_INTERPOLATION": "正常插值",
+            "SPEED_EDGE_EXTRAPOLATION": "速度边界外推",
+            "OPENING_EXTRAPOLATION": "开度外推",
+            "DOUBLE_EXTRAPOLATION_EXPERIMENTAL": "双重外推（实验性）",
+            "NORMAL_IN_RANGE": "支持域内",
+            "EXPERIMENTAL_EXTRAPOLATION": "实验性外推",
+            "": "-",
+        }
+        return mapping.get(route_mode, route_mode)
+
+    def _confidence_level_text(self, confidence_level: str) -> str:
+        mapping = {
+            "HIGH": "高",
+            "MEDIUM": "中",
+            "LOW": "低",
+            "": "-",
+        }
+        return mapping.get(confidence_level, confidence_level)
+
+    def _speed_clip_state_text(self, speed_clip_state: str) -> str:
+        mapping = {
+            "NOT_CLIPPED": "未裁剪",
+            "CLIPPED_TO_20": "裁剪到 20 r/min",
+            "CLIPPED_TO_60": "裁剪到 60 r/min",
+            "": "-",
+        }
+        return mapping.get(speed_clip_state, speed_clip_state)
+
+    def _format_forward_prediction_spec(self, result: ForwardPredictionResult) -> str:
+        lines = [
+            f"输入：开度 {result.opening_mm:.1f} mm，转速 {result.speed_r_min:.2f} r/min",
+            f"预测排肥量：{result.mass_hat_g_min:.2f} g/min",
+        ]
+        if result.equivalent_rate_kg_ha is None:
+            lines.append("等效施肥量：缺少有效行距或作业速度，暂不显示")
+        else:
+            lines.append(f"等效施肥量：{result.equivalent_rate_kg_ha:.2f} kg/ha")
+        lines.extend(
+            [
+                f"模型路由：{result.model_route}",
+                f"开度状态：{self._opening_state_text(result.opening_state)}",
+                f"转速状态：{self._speed_state_text(result.speed_state)}",
+                f"路由模式：{self._route_mode_text(result.route_mode)}",
+                f"置信度：{self._confidence_level_text(result.confidence_level)}",
+            ]
+        )
+        return "\n".join(lines)
+
     def _reset_machine_defaults(self) -> None:
         self.row_count_var.set("6")
         self.row_spacing_var.set("0.6")
@@ -814,8 +1029,8 @@ class FertilizerApp(tk.Tk):
 
     def _run_forward_prediction(self) -> None:
         try:
-            if self.controller.forward_kan_bundle is None:
-                self._load_forward_model_from_current_input(log_success=False)
+            if self.controller.forward_kan_bundle is None or self.controller.forward_mlp_bundle is None:
+                self._load_forward_models_from_current_inputs(log_success=False)
 
             opening_mm, speed_r_min = self._parse_forward_prediction_inputs()
             row_spacing_m, travel_speed_kmh = self._forward_rate_context()
@@ -825,13 +1040,13 @@ class FertilizerApp(tk.Tk):
                 row_spacing_m=row_spacing_m,
                 travel_speed_kmh=travel_speed_kmh,
             )
-            self.forward_prediction_var.set(self._format_forward_prediction(result))
+            self.forward_prediction_var.set(self._format_forward_prediction_spec(result))
             self._log(
                 "前向预测："
                 f"开度 {result.opening_mm:.1f} mm，"
                 f"转速 {result.speed_r_min:.2f} r/min，"
-                f"排肥量 {result.predicted_mass_g_min:.2f} g/min，"
-                f"训练域状态 {self._forward_domain_status_text(result.domain_status)}"
+                f"排肥量 {result.mass_hat_g_min:.2f} g/min，"
+                f"路由模式 {self._route_mode_text(result.route_mode)}"
             )
         except Exception as exc:  # noqa: BLE001
             self._log(f"前向预测失败：{exc}")
@@ -1256,6 +1471,161 @@ class FertilizerApp(tk.Tk):
         self.preview_dirty_keys = set(self.PREVIEW_TITLES)
         self._set_result_state(has_result=False)
         self._render_preview_tabs(force=True)
+
+    def _configure_decision_table_spec(self) -> None:
+        columns = ("row", "zone", "rate", "mass", "opening", "raw_speed", "cmd_speed", "model", "clip", "mode")
+        headings = {
+            "row": "行号",
+            "zone": "分区",
+            "rate": "目标量 (kg/ha)",
+            "mass": "目标排肥量 (g/min)",
+            "opening": "开度 (mm)",
+            "raw_speed": "原始转速",
+            "cmd_speed": "命令转速",
+            "model": "模型",
+            "clip": "裁剪状态",
+            "mode": "路由模式",
+        }
+        widths = {
+            "row": 56,
+            "zone": 74,
+            "rate": 116,
+            "mass": 138,
+            "opening": 90,
+            "raw_speed": 96,
+            "cmd_speed": 96,
+            "model": 96,
+            "clip": 108,
+            "mode": 126,
+        }
+        numeric_columns = {"rate", "mass", "opening", "raw_speed", "cmd_speed"}
+        self.decision_table.configure(columns=columns)
+        for column in columns:
+            anchor = tk.E if column in numeric_columns else tk.CENTER
+            self.decision_table.heading(column, text=headings[column], anchor=anchor)
+            self.decision_table.column(column, width=widths[column], anchor=anchor, stretch=column != "row")
+
+    def _refresh_summary(self) -> None:
+        result = self.controller.last_result
+        if result is None:
+            self.summary_var.set("当前没有仿真结果。")
+            return
+
+        summary = result.summary
+        model_counts = summary.get("model_route_counts", {})
+        row_state_counts = summary.get("row_state_counts", {})
+        route_mode_counts = summary.get("route_mode_counts", {})
+        clip_counts = summary.get("speed_clip_state_counts", {})
+        self.summary_var.set(
+            f"总时间步：{summary.get('frame_count', 0)}\n"
+            f"总作业往返：{summary.get('pass_count', 0)}\n"
+            f"总单排决策数：{summary.get('total_row_decisions', 0)}\n"
+            f"实验性外推次数：{summary.get('experimental_extrapolation_count', 0)}\n"
+            f"inverse_KAN 调用：{model_counts.get('inverse_KAN', 0)}\n"
+            f"inverse_MLP 调用：{model_counts.get('inverse_MLP', 0)}\n"
+            f"地块外点数：{row_state_counts.get('OUT_OF_FIELD', 0)}\n"
+            f"实验性外推点数：{route_mode_counts.get('EXPERIMENTAL_EXTRAPOLATION', 0)}\n"
+            f"发生速度裁剪点数：{clip_counts.get('CLIPPED_TO_20', 0) + clip_counts.get('CLIPPED_TO_60', 0)}\n"
+            f"平均目标施肥量：{summary.get('average_target_rate_kg_ha', 0)} kg/ha\n"
+            f"平均命令转速：{summary.get('average_speed_r_min_cmd', 0)} r/min\n"
+            f"平均原始转速：{summary.get('average_raw_speed_r_min', 0)} r/min"
+        )
+
+    def _refresh_decision_table(self, frame) -> None:
+        if not self._table_dirty and self._table_frame_index == self.current_frame_index:
+            return
+
+        self._clear_decision_table()
+        for index, decision in enumerate(frame.row_decisions):
+            tag = "evenrow" if index % 2 else "oddrow"
+            in_field = decision.row_state == IN_FIELD
+            self.decision_table.insert(
+                "",
+                tk.END,
+                values=(
+                    decision.row_index,
+                    decision.zone_id or "-",
+                    f"{decision.target_rate_kg_ha:.1f}",
+                    f"{decision.target_mass_g_min:.1f}",
+                    f"{decision.opening_mm:.1f}" if in_field else "-",
+                    f"{decision.raw_speed_r_min:.2f}" if in_field else "-",
+                    f"{decision.speed_r_min_cmd:.2f}" if in_field else "-",
+                    decision.model_route or "-",
+                    self._speed_clip_state_text(decision.speed_clip_state),
+                    self._route_mode_text(decision.route_mode),
+                ),
+                tags=(tag,),
+            )
+
+        self._table_dirty = False
+        self._table_frame_index = self.current_frame_index
+
+    def _load_default_models(self, show_message: bool = True) -> None:
+        self.kan_dir_var.set(str(DEFAULT_KAN_ARTIFACT_DIR))
+        self.mlp_dir_var.set(str(DEFAULT_MLP_ARTIFACT_DIR))
+        self.forward_kan_dir_var.set(str(DEFAULT_FORWARD_KAN_ARTIFACT_DIR))
+        self.forward_mlp_dir_var.set(str(DEFAULT_FORWARD_MLP_ARTIFACT_DIR))
+        self._load_models_from_current_inputs(show_message=show_message)
+
+    def _load_inverse_models_from_current_inputs(self, *, log_success: bool = True):
+        kan_bundle, mlp_bundle = self.controller.load_models_from_dirs(self.kan_dir_var.get(), self.mlp_dir_var.get())
+        if log_success:
+            self._log(f"已加载决策模型：{kan_bundle.config.name}、{mlp_bundle.config.name}")
+        return kan_bundle, mlp_bundle
+
+    def _load_forward_models_from_current_inputs(self, *, log_success: bool = True):
+        forward_kan_bundle, forward_mlp_bundle = self.controller.load_forward_models_from_dirs(
+            self.forward_kan_dir_var.get(),
+            self.forward_mlp_dir_var.get(),
+        )
+        if log_success:
+            self._log(f"已加载前向模型：{forward_kan_bundle.config.name}、{forward_mlp_bundle.config.name}")
+        return forward_kan_bundle, forward_mlp_bundle
+
+    def _load_models_from_current_inputs(self, show_message: bool = True) -> None:
+        try:
+            kan_bundle, mlp_bundle = self._load_inverse_models_from_current_inputs(log_success=False)
+            forward_kan_bundle, forward_mlp_bundle = self._load_forward_models_from_current_inputs(log_success=False)
+            self._log(
+                "已加载决策模型："
+                f"{kan_bundle.config.name}、{mlp_bundle.config.name}；"
+                "已加载前向模型："
+                f"{forward_kan_bundle.config.name}、{forward_mlp_bundle.config.name}"
+            )
+            if show_message:
+                messagebox.showinfo(
+                    "模型加载完成",
+                    "已成功加载决策模型（inverse_KAN、inverse_MLP）和前向模型（forward_KAN、forward_MLP）。",
+                )
+        except Exception as exc:  # noqa: BLE001
+            self._log(f"模型加载失败：{exc}")
+            if show_message:
+                messagebox.showerror("模型加载失败", str(exc))
+
+    def _run_forward_prediction(self) -> None:
+        try:
+            if self.controller.forward_kan_bundle is None or self.controller.forward_mlp_bundle is None:
+                self._load_forward_models_from_current_inputs(log_success=False)
+
+            opening_mm, speed_r_min = self._parse_forward_prediction_inputs()
+            row_spacing_m, travel_speed_kmh = self._forward_rate_context()
+            result = self.controller.predict_forward_mass(
+                opening_mm,
+                speed_r_min,
+                row_spacing_m=row_spacing_m,
+                travel_speed_kmh=travel_speed_kmh,
+            )
+            self.forward_prediction_var.set(self._format_forward_prediction_spec(result))
+            self._log(
+                "前向预测："
+                f"开度 {result.opening_mm:.1f} mm，"
+                f"转速 {result.speed_r_min:.2f} r/min，"
+                f"排肥量 {result.mass_hat_g_min:.2f} g/min，"
+                f"路由模式 {self._route_mode_text(result.route_mode)}"
+            )
+        except Exception as exc:  # noqa: BLE001
+            self._log(f"前向预测失败：{exc}")
+            messagebox.showerror("前向预测失败", str(exc))
 
     def _export_results(self) -> None:
         try:

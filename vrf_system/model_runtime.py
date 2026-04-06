@@ -13,14 +13,20 @@ try:
 except ImportError:  # pragma: no cover - 打包后的精简运行时允许不带 torch
     torch = None
 
-from .defaults import DEFAULT_FORWARD_KAN_ARTIFACT_DIR, DEFAULT_KAN_ARTIFACT_DIR, DEFAULT_MLP_ARTIFACT_DIR
+from .defaults import (
+    DEFAULT_FORWARD_KAN_ARTIFACT_DIR,
+    DEFAULT_FORWARD_MLP_ARTIFACT_DIR,
+    DEFAULT_KAN_ARTIFACT_DIR,
+    DEFAULT_MLP_ARTIFACT_DIR,
+)
 from .domain import ModelBundleConfig
 
 
 EPS = 1e-8
 INVERSE_MODEL_TYPES = {"inverse_KAN", "inverse_MLP"}
-FORWARD_MODEL_TYPES = {"forward_KAN"}
+FORWARD_MODEL_TYPES = {"forward_KAN", "forward_MLP"}
 KAN_MODEL_TYPES = {"inverse_KAN", "forward_KAN"}
+JOBLIB_MODEL_TYPES = {"inverse_MLP", "forward_MLP"}
 KAN_NPZ_KEYS = {
     "kan1_input_grid": "kan1.input_grid",
     "kan1_base_weight": "kan1.base_weight",
@@ -102,7 +108,7 @@ class ModelBundle:
         y_max = _scalar_norm_value(self.norm["y_max"])
         features_norm = (features - x_min) / (x_max - x_min + EPS)
 
-        if self.config.model_type == "inverse_MLP":
+        if self.config.model_type in JOBLIB_MODEL_TYPES:
             pred_norm = np.asarray(self.model.predict(features_norm), dtype=np.float32).reshape(-1)
         elif self.config.model_type in KAN_MODEL_TYPES:
             pred_norm = np.asarray(self.model.predict(features_norm), dtype=np.float32).reshape(-1)
@@ -248,11 +254,22 @@ def build_default_forward_model_config() -> ModelBundleConfig:
     )
 
 
+def build_default_forward_model_configs() -> tuple[ModelBundleConfig, ModelBundleConfig]:
+    kan = build_default_forward_model_config()
+    mlp = ModelBundleConfig(
+        name="forward_MLP",
+        model_type="forward_MLP",
+        model_path=DEFAULT_FORWARD_MLP_ARTIFACT_DIR / "model.joblib",
+        meta_path=DEFAULT_FORWARD_MLP_ARTIFACT_DIR / "meta.json",
+    )
+    return kan, mlp
+
+
 def bundle_config_from_artifact_dir(name: str, model_type: str, artifact_dir: str | Path) -> ModelBundleConfig:
     artifact_path = Path(artifact_dir).resolve()
     if model_type in KAN_MODEL_TYPES:
         model_path = _resolve_kan_model_path(artifact_path)
-    elif model_type == "inverse_MLP":
+    elif model_type in JOBLIB_MODEL_TYPES:
         model_path = artifact_path / "model.joblib"
     else:
         raise ModelArtifactError(f"未知模型类型：{model_type}")
@@ -271,7 +288,7 @@ def load_model_bundle(config: ModelBundleConfig) -> ModelBundle:
         raise ModelArtifactError(f"模型元数据不存在：{config.meta_path}")
 
     meta = json.loads(config.meta_path.read_text(encoding="utf-8"))
-    if config.model_type == "inverse_MLP":
+    if config.model_type in JOBLIB_MODEL_TYPES:
         model = joblib.load(config.model_path)
     elif config.model_type in KAN_MODEL_TYPES:
         if config.model_path.suffix.lower() == ".npz":

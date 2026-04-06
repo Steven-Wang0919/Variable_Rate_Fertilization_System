@@ -16,6 +16,7 @@ from matplotlib.patches import Rectangle
 
 from .annotations import format_row_annotation
 from .domain import PrescriptionCell, SimulationFrame, SimulationResult
+from .routing_spec import INVERSE_KAN, OUT_OF_FIELD
 from .prescription import PrescriptionMap
 
 
@@ -203,16 +204,18 @@ def _points_array(points: list[tuple[float, float]]) -> np.ndarray:
 def _group_row_points(
     frame: SimulationFrame,
 ) -> tuple[list, list[tuple[float, float]], list[tuple[float, float]], list[tuple[float, float]]]:
-    valid_rows = [decision for decision in sorted(frame.row_decisions, key=lambda item: item.row_index) if decision.status != "out_of_field"]
+    valid_rows = [
+        decision for decision in sorted(frame.row_decisions, key=lambda item: item.row_index) if decision.row_state != OUT_OF_FIELD
+    ]
     kan_points: list[tuple[float, float]] = []
     mlp_points: list[tuple[float, float]] = []
     out_points: list[tuple[float, float]] = []
 
     for decision in frame.row_decisions:
         point = (decision.x_m, decision.y_m)
-        if decision.status == "out_of_field":
+        if decision.row_state == OUT_OF_FIELD:
             out_points.append(point)
-        elif decision.selected_model == "inverse_KAN":
+        elif decision.model_route == INVERSE_KAN:
             kan_points.append(point)
         else:
             mlp_points.append(point)
@@ -221,9 +224,9 @@ def _group_row_points(
 
 
 def _decision_color(decision) -> str:
-    if decision.status == "out_of_field":
+    if decision.row_state == OUT_OF_FIELD:
         return OUT_COLOR
-    if decision.selected_model == "inverse_KAN":
+    if decision.model_route == INVERSE_KAN:
         return KAN_COLOR
     return MLP_COLOR
 
@@ -587,8 +590,8 @@ def create_legend_figure(result: SimulationResult):
         Line2D([0], [0], color=PATH_COLOR, lw=1.5, alpha=0.5, label="机器历史轨迹"),
         Line2D([0], [0], color=SPAN_COLOR, lw=2.2, label="当前机器跨排行线"),
         Line2D([0], [0], marker="*", color=SPAN_COLOR, linestyle="", markersize=10, label="机器中心"),
-        Line2D([0], [0], marker="o", color=KAN_COLOR, linestyle="", markersize=7, label="inverse_KAN 域内决策"),
-        Line2D([0], [0], marker="s", color=MLP_COLOR, linestyle="", markersize=7, label="inverse_MLP 外推决策"),
+        Line2D([0], [0], marker="o", color=KAN_COLOR, linestyle="", markersize=7, label="inverse_KAN 决策"),
+        Line2D([0], [0], marker="s", color=MLP_COLOR, linestyle="", markersize=7, label="inverse_MLP 决策"),
         Line2D([0], [0], marker="x", color=OUT_COLOR, linestyle="", markersize=7, label="地块外单排位置"),
     ]
     ax_legend.legend(handles=handles, loc="center left", frameon=False, fontsize=10)

@@ -19,13 +19,14 @@ class ConstantPredictor:
         return np.full((batch_size,), self.pred_norm, dtype=np.float32)
 
 
-def build_forward_bundle(*, pred_norm: float) -> ModelBundle:
+def build_forward_bundle(*, name: str, model_type: str, pred_norm: float) -> ModelBundle:
+    model_file = "model.joblib" if model_type == "forward_MLP" else "model.pth"
     return ModelBundle(
         config=ModelBundleConfig(
-            name="forward_KAN",
-            model_type="forward_KAN",
-            model_path=Path("forward_KAN/model.pth"),
-            meta_path=Path("forward_KAN/meta.json"),
+            name=name,
+            model_type=model_type,
+            model_path=Path(name) / model_file,
+            meta_path=Path(name) / "meta.json",
         ),
         meta={
             "training_domain": {
@@ -52,14 +53,24 @@ def build_forward_bundle(*, pred_norm: float) -> ModelBundle:
 class ForwardPredictionControllerTests(unittest.TestCase):
     def setUp(self) -> None:
         self.controller = SimulationController()
+        self.controller.forward_kan_bundle = build_forward_bundle(
+            name="forward_KAN",
+            model_type="forward_KAN",
+            pred_norm=0.5,
+        )
+        self.controller.forward_mlp_bundle = build_forward_bundle(
+            name="forward_MLP",
+            model_type="forward_MLP",
+            pred_norm=0.75,
+        )
 
-    def test_predict_forward_mass_should_raise_when_model_missing(self) -> None:
-        with self.assertRaisesRegex(ModelArtifactError, "前向 KAN 预测模型"):
+    def test_predict_forward_mass_should_raise_when_forward_bundles_missing(self) -> None:
+        self.controller.forward_kan_bundle = None
+        self.controller.forward_mlp_bundle = None
+        with self.assertRaisesRegex(ModelArtifactError, "前向 KAN 和 MLP 预测模型"):
             self.controller.predict_forward_mass(35.0, 40.0)
 
-    def test_predict_forward_mass_should_return_mass_and_equivalent_rate(self) -> None:
-        self.controller.forward_kan_bundle = build_forward_bundle(pred_norm=0.5)
-
+    def test_predict_forward_mass_should_use_forward_kan_inside_opening_support(self) -> None:
         result = self.controller.predict_forward_mass(
             35.0,
             40.0,
@@ -67,38 +78,59 @@ class ForwardPredictionControllerTests(unittest.TestCase):
             travel_speed_kmh=6.0,
         )
 
-        self.assertAlmostEqual(result.predicted_mass_g_min, 50.0, places=5)
+        self.assertAlmostEqual(result.mass_hat_g_min, 50.0, places=5)
         self.assertAlmostEqual(result.equivalent_rate_kg_ha or 0.0, 10.0, places=5)
-        self.assertEqual(result.selected_model, "forward_KAN")
-        self.assertEqual(result.domain_status, "in_domain")
-        self.assertEqual(result.status, "ok")
+        self.assertEqual(result.model_route, "forward_KAN")
+        self.assertEqual(result.opening_state, "IN_OPENING_SUPPORT")
+        self.assertEqual(result.speed_state, "IN_SPEED_SUPPORT")
+        self.assertEqual(result.route_mode, "NORMAL_INTERPOLATION")
+        self.assertEqual(result.confidence_level, "HIGH")
         self.assertIs(self.controller.last_forward_prediction, result)
 
-    def test_predict_forward_mass_should_report_extrapolation_modes(self) -> None:
-        self.controller.forward_kan_bundle = build_forward_bundle(pred_norm=0.5)
-        cases = [
-            ((10.0, 40.0), "opening_extrapolation"),
-            ((35.0, 10.0), "speed_extrapolation"),
-            ((10.0, 10.0), "opening_and_speed_extrapolation"),
-        ]
+    def test_predict_forward_mass_should_keep_forward_kan_for_speed_only_extrapolation(self) -> None:
+        result = self.controller.predict_forward_mass(35.0, 10.0)
 
-        for (opening_mm, speed_r_min), expected_status in cases:
-            with self.subTest(opening_mm=opening_mm, speed_r_min=speed_r_min):
-                result = self.controller.predict_forward_mass(opening_mm, speed_r_min)
-                self.assertEqual(result.domain_status, expected_status)
+        self.assertAlmostEqual(result.mass_hat_g_min, 50.0, places=5)
+        self.assertEqual(result.model_route, "forward_KAN")
+        self.assertEqual(result.opening_state, "IN_OPENING_SUPPORT")
+        self.assertEqual(result.speed_state, "BELOW_SPEED_SUPPORT")
+        self.assertEqual(result.route_mode, "SPEED_EDGE_EXTRAPOLATION")
+        self.assertEqual(result.confidence_level, "MEDIUM")
 
-    def test_predict_forward_mass_should_clamp_negative_output(self) -> None:
-        self.controller.forward_kan_bundle = build_forward_bundle(pred_norm=-0.1)
+    def test_predict_forward_mass_should_use_forward_mlp_for_opening_extrapolation(self) -> None:
+        result = self.controller.predict_forward_mass(10.0, 40.0)
+
+        self.assertAlmostEqual(result.mass_hat_g_min, 75.0, places=5)
+        self.assertEqual(result.model_route, "forward_MLP")
+        self.assertEqual(result.opening_state, "OUT_OF_OPENING_SUPPORT")
+        self.assertEqual(result.speed_state, "IN_SPEED_SUPPORT")
+        self.assertEqual(result.route_mode, "OPENING_EXTRAPOLATION")
+        self.assertEqual(result.confidence_level, "LOW")
+
+    def test_predict_forward_mass_should_use_forward_mlp_for_double_extrapolation(self) -> None:
+        result = self.controller.predict_forward_mass(10.0, 10.0)
+
+        self.assertAlmostEqual(result.mass_hat_g_min, 75.0, places=5)
+        self.assertEqual(result.model_route, "forward_MLP")
+        self.assertEqual(result.opening_state, "OUT_OF_OPENING_SUPPORT")
+        self.assertEqual(result.speed_state, "BELOW_SPEED_SUPPORT")
+        self.assertEqual(result.route_mode, "DOUBLE_EXTRAPOLATION_EXPERIMENTAL")
+        self.assertEqual(result.confidence_level, "LOW")
+
+    def test_predict_forward_mass_should_not_clamp_negative_output(self) -> None:
+        self.controller.forward_kan_bundle = build_forward_bundle(
+            name="forward_KAN",
+            model_type="forward_KAN",
+            pred_norm=-0.1,
+        )
 
         result = self.controller.predict_forward_mass(35.0, 40.0)
 
-        self.assertEqual(result.predicted_mass_g_min, 0.0)
-        self.assertEqual(result.status, "clamped_low")
-        self.assertEqual(result.domain_status, "in_domain")
+        self.assertEqual(result.mass_hat_g_min, -10.0)
+        self.assertEqual(result.model_route, "forward_KAN")
+        self.assertEqual(result.route_mode, "NORMAL_INTERPOLATION")
 
     def test_predict_forward_mass_should_skip_equivalent_rate_when_context_invalid(self) -> None:
-        self.controller.forward_kan_bundle = build_forward_bundle(pred_norm=0.5)
-
         result = self.controller.predict_forward_mass(
             35.0,
             40.0,

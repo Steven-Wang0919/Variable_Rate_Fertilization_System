@@ -39,11 +39,15 @@ def export_simulation_result(
             "row_index",
             "x_m",
             "y_m",
-            "selected_model",
-            "domain_status",
-            "strategy_opening_mm",
-            "target_speed_r_min",
-            "status",
+            "row_state",
+            "model_route",
+            "mass_state",
+            "opening_mm",
+            "raw_speed_r_min",
+            "speed_r_min_cmd",
+            "route_mode",
+            "speed_clip_state",
+            "confidence_level",
         ]
     ].to_csv(routing_trace, index=False, encoding="utf-8-sig")
 

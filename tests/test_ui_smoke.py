@@ -7,7 +7,7 @@ from tkinter import TclError
 import matplotlib.pyplot as plt
 
 from vrf_system.annotations import OUT_OF_FIELD_TEXT, format_row_annotation
-from vrf_system.defaults import DEFAULT_FORWARD_KAN_ARTIFACT_DIR
+from vrf_system.defaults import DEFAULT_FORWARD_KAN_ARTIFACT_DIR, DEFAULT_FORWARD_MLP_ARTIFACT_DIR
 from vrf_system.domain import (
     Bounds,
     ForwardPredictionResult,
@@ -69,11 +69,15 @@ def build_sample_result() -> SimulationResult:
                     zone_id="A1",
                     target_rate_kg_ha=180.0,
                     target_mass_g_min=108.0,
-                    strategy_opening_mm=20.0,
-                    target_speed_r_min=298.75,
-                    selected_model="inverse_KAN",
-                    domain_status="in_domain",
-                    status="ok",
+                    row_state="IN_FIELD",
+                    opening_mm=20.0,
+                    raw_speed_r_min=298.75,
+                    speed_r_min_cmd=60.0,
+                    model_route="inverse_KAN",
+                    mass_state="IN_GLOBAL_SUPPORT",
+                    route_mode="NORMAL_IN_RANGE",
+                    speed_clip_state="CLIPPED_TO_60",
+                    confidence_level="HIGH",
                 ),
                 RowDecision(
                     timestamp_ms=0,
@@ -84,11 +88,15 @@ def build_sample_result() -> SimulationResult:
                     zone_id="A1",
                     target_rate_kg_ha=180.0,
                     target_mass_g_min=108.0,
-                    strategy_opening_mm=35.0,
-                    target_speed_r_min=312.40,
-                    selected_model="inverse_MLP",
-                    domain_status="extrapolated",
-                    status="ok",
+                    row_state="IN_FIELD",
+                    opening_mm=20.0,
+                    raw_speed_r_min=18.4,
+                    speed_r_min_cmd=20.0,
+                    model_route="inverse_MLP",
+                    mass_state="BELOW_GLOBAL_SUPPORT",
+                    route_mode="EXPERIMENTAL_EXTRAPOLATION",
+                    speed_clip_state="CLIPPED_TO_20",
+                    confidence_level="LOW",
                 ),
             ],
         ),
@@ -108,11 +116,15 @@ def build_sample_result() -> SimulationResult:
                     zone_id="B2",
                     target_rate_kg_ha=260.0,
                     target_mass_g_min=156.0,
-                    strategy_opening_mm=35.0,
-                    target_speed_r_min=365.25,
-                    selected_model="inverse_KAN",
-                    domain_status="in_domain",
-                    status="ok",
+                    row_state="IN_FIELD",
+                    opening_mm=50.0,
+                    raw_speed_r_min=72.5,
+                    speed_r_min_cmd=60.0,
+                    model_route="inverse_KAN",
+                    mass_state="ABOVE_GLOBAL_SUPPORT",
+                    route_mode="EXPERIMENTAL_EXTRAPOLATION",
+                    speed_clip_state="CLIPPED_TO_60",
+                    confidence_level="MEDIUM",
                 ),
                 RowDecision(
                     timestamp_ms=500,
@@ -123,11 +135,15 @@ def build_sample_result() -> SimulationResult:
                     zone_id="",
                     target_rate_kg_ha=0.0,
                     target_mass_g_min=0.0,
-                    strategy_opening_mm=0.0,
-                    target_speed_r_min=0.0,
-                    selected_model="none",
-                    domain_status="out_of_field",
-                    status="out_of_field",
+                    row_state="OUT_OF_FIELD",
+                    opening_mm=0.0,
+                    raw_speed_r_min=0.0,
+                    speed_r_min_cmd=0.0,
+                    model_route="",
+                    mass_state="",
+                    route_mode="",
+                    speed_clip_state="",
+                    confidence_level="",
                 ),
             ],
         ),
@@ -141,21 +157,36 @@ def build_sample_result() -> SimulationResult:
             "frame_count": 2,
             "pass_count": 1,
             "total_row_decisions": 4,
-            "extrapolation_count": 1,
-            "selected_model_counts": {
+            "experimental_extrapolation_count": 2,
+            "model_route_counts": {
                 "inverse_KAN": 2,
                 "inverse_MLP": 1,
             },
-            "status_counts": {
-                "ok": 3,
-                "out_of_field": 1,
+            "row_state_counts": {
+                "IN_FIELD": 3,
+                "OUT_OF_FIELD": 1,
             },
-            "domain_status_counts": {
-                "in_domain": 2,
-                "extrapolated": 1,
+            "mass_state_counts": {
+                "IN_GLOBAL_SUPPORT": 1,
+                "BELOW_GLOBAL_SUPPORT": 1,
+                "ABOVE_GLOBAL_SUPPORT": 1,
+            },
+            "route_mode_counts": {
+                "NORMAL_IN_RANGE": 1,
+                "EXPERIMENTAL_EXTRAPOLATION": 2,
+            },
+            "speed_clip_state_counts": {
+                "CLIPPED_TO_20": 1,
+                "CLIPPED_TO_60": 2,
+            },
+            "confidence_level_counts": {
+                "HIGH": 1,
+                "MEDIUM": 1,
+                "LOW": 1,
             },
             "average_target_rate_kg_ha": 220.0,
-            "average_target_speed_r_min": 325.47,
+            "average_speed_r_min_cmd": 46.6667,
+            "average_raw_speed_r_min": 129.8833,
         },
     )
 
@@ -181,10 +212,25 @@ def expected_decision_table_rows(frame: SimulationFrame) -> list[tuple[str, ...]
             decision.zone_id or "-",
             f"{decision.target_rate_kg_ha:.1f}",
             f"{decision.target_mass_g_min:.1f}",
-            f"{decision.strategy_opening_mm:.1f}",
-            f"{decision.target_speed_r_min:.2f}",
-            decision.selected_model,
-            decision.status,
+            f"{decision.opening_mm:.1f}" if decision.row_state == "IN_FIELD" else "-",
+            f"{decision.raw_speed_r_min:.2f}" if decision.row_state == "IN_FIELD" else "-",
+            f"{decision.speed_r_min_cmd:.2f}" if decision.row_state == "IN_FIELD" else "-",
+            decision.model_route or "-",
+            {
+                "NOT_CLIPPED": "未裁剪",
+                "CLIPPED_TO_20": "裁剪到 20 r/min",
+                "CLIPPED_TO_60": "裁剪到 60 r/min",
+                "": "-",
+            }.get(decision.speed_clip_state, decision.speed_clip_state),
+            {
+                "NORMAL_INTERPOLATION": "正常插值",
+                "SPEED_EDGE_EXTRAPOLATION": "速度边界外推",
+                "OPENING_EXTRAPOLATION": "开度外推",
+                "DOUBLE_EXTRAPOLATION_EXPERIMENTAL": "双重外推（实验性）",
+                "NORMAL_IN_RANGE": "支持域内",
+                "EXPERIMENTAL_EXTRAPOLATION": "实验性外推",
+                "": "-",
+            }.get(decision.route_mode, decision.route_mode),
         )
         for decision in frame.row_decisions
     ]
@@ -223,8 +269,9 @@ class UISmokeTests(unittest.TestCase):
     def test_forward_prediction_panel_should_have_default_empty_state(self) -> None:
         app = self.create_app()
         self.assertEqual(app.forward_kan_dir_var.get(), str(DEFAULT_FORWARD_KAN_ARTIFACT_DIR))
+        self.assertEqual(app.forward_mlp_dir_var.get(), str(DEFAULT_FORWARD_MLP_ARTIFACT_DIR))
         self.assertEqual(app.forward_prediction_var.get(), "请输入开度与转速后执行预测。")
-        self.assertEqual(app.forward_predict_button.cget("text"), "执行正向预测")
+        self.assertEqual(app.forward_predict_button.cget("text"), "执行前向预测")
         app.destroy()
 
     def test_left_panel_should_create_scrollable_form_area_and_fixed_log_area(self) -> None:
@@ -592,14 +639,17 @@ class UISmokeTests(unittest.TestCase):
             return ForwardPredictionResult(
                 opening_mm=opening_mm,
                 speed_r_min=speed_r_min,
-                predicted_mass_g_min=2150.5,
+                mass_hat_g_min=2150.5,
                 equivalent_rate_kg_ha=358.42,
-                selected_model="forward_KAN",
-                domain_status="speed_extrapolation",
-                status="ok",
+                model_route="forward_KAN",
+                opening_state="IN_OPENING_SUPPORT",
+                speed_state="ABOVE_SPEED_SUPPORT",
+                route_mode="SPEED_EDGE_EXTRAPOLATION",
+                confidence_level="MEDIUM",
             )
 
         app.controller.forward_kan_bundle = object()  # type: ignore[assignment]
+        app.controller.forward_mlp_bundle = object()  # type: ignore[assignment]
         app.controller.predict_forward_mass = fake_predict_forward_mass  # type: ignore[method-assign]
         summary_before = app.summary_var.get()
         frame_info_before = app.frame_info_var.get()
@@ -651,6 +701,60 @@ class UISmokeTests(unittest.TestCase):
 
         plt.close(renderer.figure)
 
+    def test_forward_prediction_should_update_panel_without_mutating_simulation_views(self) -> None:
+        app = self.create_app()
+        captured: dict[str, float | None] = {}
+
+        def fake_predict_forward_mass(
+            opening_mm: float,
+            speed_r_min: float,
+            *,
+            row_spacing_m: float | None = None,
+            travel_speed_kmh: float | None = None,
+        ) -> ForwardPredictionResult:
+            captured["opening_mm"] = opening_mm
+            captured["speed_r_min"] = speed_r_min
+            captured["row_spacing_m"] = row_spacing_m
+            captured["travel_speed_kmh"] = travel_speed_kmh
+            return ForwardPredictionResult(
+                opening_mm=opening_mm,
+                speed_r_min=speed_r_min,
+                mass_hat_g_min=2150.5,
+                equivalent_rate_kg_ha=358.42,
+                model_route="forward_KAN",
+                opening_state="IN_OPENING_SUPPORT",
+                speed_state="ABOVE_SPEED_SUPPORT",
+                route_mode="SPEED_EDGE_EXTRAPOLATION",
+                confidence_level="MEDIUM",
+            )
+
+        app.controller.forward_kan_bundle = object()  # type: ignore[assignment]
+        app.controller.forward_mlp_bundle = object()  # type: ignore[assignment]
+        app.controller.predict_forward_mass = fake_predict_forward_mass  # type: ignore[method-assign]
+        summary_before = app.summary_var.get()
+        frame_info_before = app.frame_info_var.get()
+        table_count_before = len(app.decision_table.get_children())
+        log_before = app.log_text.get("1.0", "end-1c")
+
+        app.forward_opening_var.set("35")
+        app.forward_speed_var.set("65")
+        app._run_forward_prediction()
+        app.update_idletasks()
+
+        self.assertEqual(captured["opening_mm"], 35.0)
+        self.assertEqual(captured["speed_r_min"], 65.0)
+        self.assertEqual(captured["row_spacing_m"], 0.6)
+        self.assertEqual(captured["travel_speed_kmh"], 6.0)
+        self.assertEqual(app.summary_var.get(), summary_before)
+        self.assertEqual(app.frame_info_var.get(), frame_info_before)
+        self.assertEqual(len(app.decision_table.get_children()), table_count_before)
+        self.assertIn("预测排肥量：2150.50 g/min", app.forward_prediction_var.get())
+        self.assertIn("速度边界外推", app.forward_prediction_var.get())
+        log_after = app.log_text.get("1.0", "end-1c")
+        self.assertIn("前向预测", log_after)
+        self.assertGreater(len(log_after), len(log_before))
+        app.destroy()
+
     def test_out_of_field_label_should_use_status_text(self) -> None:
         decision = RowDecision(
             timestamp_ms=0,
@@ -661,10 +765,14 @@ class UISmokeTests(unittest.TestCase):
             zone_id="",
             target_rate_kg_ha=0.0,
             target_mass_g_min=0.0,
-            strategy_opening_mm=0.0,
-            target_speed_r_min=0.0,
-            selected_model="none",
-            domain_status="out_of_field",
-            status="out_of_field",
+            row_state="OUT_OF_FIELD",
+            opening_mm=0.0,
+            raw_speed_r_min=0.0,
+            speed_r_min_cmd=0.0,
+            model_route="",
+            mass_state="",
+            route_mode="",
+            speed_clip_state="",
+            confidence_level="",
         )
         self.assertEqual(format_row_annotation(decision), f"R3 | {OUT_OF_FIELD_TEXT}")

@@ -117,11 +117,13 @@ class ModelBundleConfig:
 class ForwardPredictionResult:
     opening_mm: float
     speed_r_min: float
-    predicted_mass_g_min: float
+    mass_hat_g_min: float
     equivalent_rate_kg_ha: float | None
-    selected_model: str
-    domain_status: str
-    status: str
+    model_route: str
+    opening_state: str
+    speed_state: str
+    route_mode: str
+    confidence_level: str
 
     def to_record(self) -> dict[str, Any]:
         return asdict(self)
@@ -137,11 +139,15 @@ class RowDecision:
     zone_id: str
     target_rate_kg_ha: float
     target_mass_g_min: float
-    strategy_opening_mm: float
-    target_speed_r_min: float
-    selected_model: str
-    domain_status: str
-    status: str
+    row_state: str
+    opening_mm: float
+    raw_speed_r_min: float
+    speed_r_min_cmd: float
+    model_route: str
+    mass_state: str
+    route_mode: str
+    speed_clip_state: str
+    confidence_level: str
 
     def to_record(self) -> dict[str, Any]:
         return asdict(self)
