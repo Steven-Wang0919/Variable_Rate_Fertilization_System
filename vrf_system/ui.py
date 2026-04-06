@@ -101,6 +101,10 @@ class FertilizerApp(tk.Tk):
         self.left_panel: ttk.Frame | None = None
         self.center_panel: ttk.Frame | None = None
         self.right_panel: ttk.Frame | None = None
+        self.decision_table_container: ttk.Frame | None = None
+        self.decision_table: ttk.Treeview | None = None
+        self.decision_table_x_scrollbar: ttk.Scrollbar | None = None
+        self.decision_table_y_scrollbar: ttk.Scrollbar | None = None
         self.left_form_canvas: tk.Canvas | None = None
         self.left_form_scrollbar: ttk.Scrollbar | None = None
         self.left_form_content: ttk.Frame | None = None
@@ -569,8 +573,12 @@ class FertilizerApp(tk.Tk):
 
         table_box = ttk.LabelFrame(parent, text="当前时刻单排行决策", padding=12)
         table_box.pack(fill=tk.BOTH, expand=True)
+        self.decision_table_container = ttk.Frame(table_box, style="Card.TFrame")
+        self.decision_table_container.pack(fill=tk.BOTH, expand=True)
+        self.decision_table_container.columnconfigure(0, weight=1)
+        self.decision_table_container.rowconfigure(0, weight=1)
         columns = ("row", "zone", "rate", "mass", "opening", "speed", "model", "status")
-        self.decision_table = ttk.Treeview(table_box, columns=columns, show="headings", height=18)
+        self.decision_table = ttk.Treeview(self.decision_table_container, columns=columns, show="headings", height=18)
         headings = {
             "row": "行号",
             "zone": "分区",
@@ -595,15 +603,28 @@ class FertilizerApp(tk.Tk):
         for column in columns:
             anchor = tk.E if column in numeric_columns else tk.CENTER
             self.decision_table.heading(column, text=headings[column], anchor=anchor)
-            self.decision_table.column(column, width=widths[column], anchor=anchor, stretch=column != "row")
+            self.decision_table.column(column, width=widths[column], anchor=anchor, stretch=False)
 
         self.decision_table.tag_configure("oddrow", background="#ffffff")
         self.decision_table.tag_configure("evenrow", background="#f8fafc")
 
-        y_scroll = ttk.Scrollbar(table_box, orient=tk.VERTICAL, command=self.decision_table.yview)
-        self.decision_table.configure(yscrollcommand=y_scroll.set)
-        self.decision_table.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        y_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        self.decision_table_y_scrollbar = ttk.Scrollbar(
+            self.decision_table_container,
+            orient=tk.VERTICAL,
+            command=self.decision_table.yview,
+        )
+        self.decision_table_x_scrollbar = ttk.Scrollbar(
+            self.decision_table_container,
+            orient=tk.HORIZONTAL,
+            command=self.decision_table.xview,
+        )
+        self.decision_table.configure(
+            yscrollcommand=self.decision_table_y_scrollbar.set,
+            xscrollcommand=self.decision_table_x_scrollbar.set,
+        )
+        self.decision_table.grid(row=0, column=0, sticky="nsew")
+        self.decision_table_y_scrollbar.grid(row=0, column=1, sticky="ns")
+        self.decision_table_x_scrollbar.grid(row=1, column=0, sticky="ew", pady=(8, 0))
 
     def _refresh_panel_toggle_texts(self) -> None:
         self.left_toggle_text.set("展开左栏" if self.left_collapsed else "收起左栏")
@@ -1503,7 +1524,7 @@ class FertilizerApp(tk.Tk):
         for column in columns:
             anchor = tk.E if column in numeric_columns else tk.CENTER
             self.decision_table.heading(column, text=headings[column], anchor=anchor)
-            self.decision_table.column(column, width=widths[column], anchor=anchor, stretch=column != "row")
+            self.decision_table.column(column, width=widths[column], anchor=anchor, stretch=False)
 
     def _refresh_summary(self) -> None:
         result = self.controller.last_result

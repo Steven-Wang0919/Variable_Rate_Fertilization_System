@@ -284,6 +284,62 @@ class UISmokeTests(unittest.TestCase):
         self.assertEqual(str(app.log_text.master.master), str(app.left_log_box))
         app.destroy()
 
+    def test_right_panel_should_keep_decision_table_horizontally_scrollable(self) -> None:
+        app = self.create_app()
+        app.deiconify()
+        app.update()
+
+        self.assertIsNotNone(app.decision_table_container)
+        self.assertIsNotNone(app.decision_table_x_scrollbar)
+        self.assertIsNotNone(app.decision_table_y_scrollbar)
+        self.assertEqual(str(app.decision_table_x_scrollbar.cget("orient")), "horizontal")
+        self.assertEqual(str(app.decision_table_y_scrollbar.cget("orient")), "vertical")
+        self.assertTrue(str(app.decision_table.cget("xscrollcommand")))
+        self.assertTrue(str(app.decision_table.cget("yscrollcommand")))
+
+        prescription = build_sample_prescription_map()
+        result = build_sample_result()
+        app.controller.prescription_map = prescription
+        app.controller.last_result = result
+        app.frame_slider.configure(to=len(result.frames) - 1)
+        app._set_result_state(has_result=True)
+        app._refresh_summary()
+        app._refresh_current_frame_details(refresh_table=True)
+        app._render_preview_tabs(force=True)
+        app.update()
+
+        self.assertEqual(decision_table_rows(app), expected_decision_table_rows(result.frames[0]))
+
+        start_view = app.decision_table.xview()
+        app.decision_table.xview_moveto(1.0)
+        app.update_idletasks()
+        moved_view = app.decision_table.xview()
+        self.assertGreater(moved_view[0], start_view[0])
+
+        app.frame_slider.set(1)
+        app._on_slider_changed("1")
+        app._cancel_live_preview_update()
+        app._process_live_preview_update()
+        app.update_idletasks()
+
+        self.assertEqual(decision_table_rows(app), expected_decision_table_rows(result.frames[1]))
+        self.assertGreater(app.decision_table.xview()[0], 0.0)
+
+        app.right_toggle_button.invoke()
+        app.update()
+        app.right_toggle_button.invoke()
+        app.update()
+
+        self.assertEqual(decision_table_rows(app), expected_decision_table_rows(result.frames[1]))
+        self.assertEqual(str(app.decision_table_x_scrollbar.cget("orient")), "horizontal")
+        app.decision_table.xview_moveto(0.0)
+        app.update_idletasks()
+        reset_view = app.decision_table.xview()
+        app.decision_table.xview_moveto(1.0)
+        app.update_idletasks()
+        self.assertGreater(app.decision_table.xview()[0], reset_view[0])
+        app.destroy()
+
     def test_side_panels_should_toggle_independently_and_restore_order(self) -> None:
         app = self.create_app()
 
