@@ -17,6 +17,7 @@ from vrf_system.domain import (
     SimulationFrame,
     SimulationResult,
 )
+from vrf_system.engine import target_mass_from_rate
 from vrf_system.prescription import PrescriptionMap
 from vrf_system.ui import FertilizerApp
 from vrf_system.visualization import create_current_preview_state, create_overview_preview_state
@@ -52,6 +53,9 @@ def build_sample_prescription_map() -> PrescriptionMap:
 
 def build_sample_result() -> SimulationResult:
     prescription = build_sample_prescription_map()
+    machine_config = MachineConfig(row_count=2, row_spacing_m=0.6, travel_speed_kmh=6.0, sample_period_ms=200)
+    target_mass_180 = target_mass_from_rate(180.0, machine_config.row_spacing_m, machine_config.travel_speed_kmh)
+    target_mass_260 = target_mass_from_rate(260.0, machine_config.row_spacing_m, machine_config.travel_speed_kmh)
     frames = [
         SimulationFrame(
             timestamp_ms=0,
@@ -68,7 +72,7 @@ def build_sample_result() -> SimulationResult:
                     y_m=0.8,
                     zone_id="A1",
                     target_rate_kg_ha=180.0,
-                    target_mass_g_min=108.0,
+                    target_mass_g_min=target_mass_180,
                     row_state="IN_FIELD",
                     opening_mm=20.0,
                     raw_speed_r_min=298.75,
@@ -87,7 +91,7 @@ def build_sample_result() -> SimulationResult:
                     y_m=1.2,
                     zone_id="A1",
                     target_rate_kg_ha=180.0,
-                    target_mass_g_min=108.0,
+                    target_mass_g_min=target_mass_180,
                     row_state="IN_FIELD",
                     opening_mm=20.0,
                     raw_speed_r_min=18.4,
@@ -115,7 +119,7 @@ def build_sample_result() -> SimulationResult:
                     y_m=0.8,
                     zone_id="B2",
                     target_rate_kg_ha=260.0,
-                    target_mass_g_min=156.0,
+                    target_mass_g_min=target_mass_260,
                     row_state="IN_FIELD",
                     opening_mm=50.0,
                     raw_speed_r_min=72.5,
@@ -150,7 +154,7 @@ def build_sample_result() -> SimulationResult:
     ]
     return SimulationResult(
         frames=frames,
-        machine_config=MachineConfig(row_count=2, row_spacing_m=0.6, travel_speed_kmh=6.0, sample_period_ms=200),
+        machine_config=machine_config,
         prescription_path=prescription.source_path,
         prescription_cells=prescription.cells,
         summary={
