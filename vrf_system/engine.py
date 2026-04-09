@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 from .domain import RowDecision
 from .model_runtime import ModelBundle
-from .routing_spec import IN_FIELD, INVERSE_KAN, clip_speed_command, inverse_route_for, select_strategy_opening
+from .routing_spec import IN_FIELD, INVERSE_KAN, inverse_route_for, select_strategy_opening
 
 
 def target_mass_from_rate(rate_kg_ha: float, row_spacing_m: float, travel_speed_kmh: float) -> float:
@@ -27,7 +27,8 @@ class ModelRouter:
     def predict(self, target_mass_g_min: float, opening_mm: float) -> tuple[float, float, str, str, str, str, str]:
         bundle, mass_state, route_mode, confidence_level = self.route(target_mass_g_min, opening_mm)
         raw_speed = float(bundle.predict_speed(target_mass_g_min, opening_mm))
-        speed_r_min_cmd, speed_clip_state = clip_speed_command(raw_speed)
+        speed_r_min_cmd = raw_speed
+        speed_clip_state = ""
         return (
             raw_speed,
             speed_r_min_cmd,

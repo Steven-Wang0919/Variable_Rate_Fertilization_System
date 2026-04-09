@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import tempfile
 import unittest
 from pathlib import Path
 import shutil
@@ -15,7 +16,9 @@ from vrf_system.defaults import (
     DEFAULT_MLP_ARTIFACT_DIR,
     DEFAULT_SAMPLE_PRESCRIPTION,
 )
-from vrf_system.domain import MachineConfig
+from vrf_system.domain import Bounds, MachineConfig, PrescriptionCell
+from vrf_system.exporters import export_simulation_result
+from vrf_system.prescription import PrescriptionMap
 from vrf_system.routing_spec import (
     ABOVE_GLOBAL_SUPPORT,
     BELOW_GLOBAL_SUPPORT,
@@ -25,9 +28,65 @@ from vrf_system.routing_spec import (
     INVERSE_MLP,
     NORMAL_IN_RANGE,
 )
+from vrf_system.simulator import FieldSimulator
 
 
 ROUTING_COVERAGE_SAMPLE = Path("samples/prescription_grid_routing_coverage.csv")
+
+
+class StubRouter:
+    def select_strategy_opening(self, target_mass_g_min: float) -> float:
+        return 20.0
+
+    def predict(self, target_mass_g_min: float, opening_mm: float) -> tuple[float, float, str, str, str, str, str]:
+        return 30.0, 30.0, INVERSE_KAN, IN_GLOBAL_SUPPORT, NORMAL_IN_RANGE, "", "HIGH"
+
+
+def build_centerline_regression_map() -> PrescriptionMap:
+    cell = PrescriptionCell(
+        cell_id="cell-1",
+        center_x_m=1.5,
+        center_y_m=3.0,
+        width_m=3.0,
+        height_m=6.0,
+        target_rate_kg_ha=260.0,
+        zone_id="A",
+    )
+    return PrescriptionMap(
+        cells=[cell],
+        bounds=Bounds(min_x=0.0, max_x=3.0, min_y=0.0, max_y=6.0),
+        source_path=Path("tests/centerline_regression.csv"),
+    )
+
+
+class FieldAlignmentTests(unittest.TestCase):
+    def test_simulation_should_align_first_pass_rows_to_centerlines(self) -> None:
+        result = FieldSimulator(StubRouter()).run(
+            build_centerline_regression_map(),
+            MachineConfig(row_count=6, row_spacing_m=0.6, travel_speed_kmh=6.0, sample_period_ms=300),
+        )
+
+        first_frame_rows = [item for item in result.frames[0].row_decisions if item.row_state == "IN_FIELD"]
+        self.assertEqual([round(item.y_m, 1) for item in first_frame_rows], [0.3, 0.9, 1.5, 2.1, 2.7, 3.3])
+        self.assertTrue(all(item.y_m > result.prescription_cells[0].bottom for item in first_frame_rows))
+
+    def test_export_should_preserve_centerline_row_coordinates(self) -> None:
+        result = FieldSimulator(StubRouter()).run(
+            build_centerline_regression_map(),
+            MachineConfig(row_count=6, row_spacing_m=0.6, travel_speed_kmh=6.0, sample_period_ms=300),
+        )
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            artifacts = export_simulation_result(result, output_root=Path(tmp_dir), highlighted_frame_index=0)
+            timeline_df = pd.read_csv(artifacts.row_command_timeline)
+            routing_df = pd.read_csv(artifacts.model_routing_trace)
+
+        timeline_first_frame = timeline_df.loc[timeline_df["timestamp_ms"] == 0].sort_values("row_index")
+        routing_first_frame = routing_df.loc[routing_df["timestamp_ms"] == 0].sort_values("row_index")
+        expected_centerlines = [0.3, 0.9, 1.5, 2.1, 2.7, 3.3]
+
+        self.assertEqual([round(value, 1) for value in timeline_first_frame["y_m"].tolist()], expected_centerlines)
+        self.assertEqual([round(value, 1) for value in routing_first_frame["y_m"].tolist()], expected_centerlines)
 
 
 @unittest.skipUnless(
@@ -66,6 +125,10 @@ class EngineAndExportTests(unittest.TestCase):
                 for frame in result.frames
             )
         )
+        first_frame_rows = [item for item in result.frames[0].row_decisions if item.row_state == "IN_FIELD"]
+        expected_centerlines = [0.3, 0.9, 1.5, 2.1, 2.7, 3.3]
+        self.assertEqual([round(item.y_m, 1) for item in first_frame_rows], expected_centerlines)
+        self.assertTrue(all(item.y_m > self.controller.prescription_map.bounds.min_y for item in first_frame_rows))
 
         outputs_root = Path.cwd() / "outputs"
         outputs_root.mkdir(exist_ok=True)
@@ -82,13 +145,21 @@ class EngineAndExportTests(unittest.TestCase):
             self.assertTrue(artifacts.map_legend_png.exists())
 
             routing_df = pd.read_csv(artifacts.model_routing_trace)
+            timeline_df = pd.read_csv(artifacts.row_command_timeline)
             self.assertIn("model_route", routing_df.columns)
             self.assertIn("route_mode", routing_df.columns)
             self.assertIn("speed_r_min_cmd", routing_df.columns)
+            in_field_routing = routing_df.loc[routing_df["row_state"] == "IN_FIELD"]
+            self.assertTrue((in_field_routing["raw_speed_r_min"] == in_field_routing["speed_r_min_cmd"]).all())
+            routing_first_frame = routing_df.loc[routing_df["timestamp_ms"] == 0].sort_values("row_index")
+            timeline_first_frame = timeline_df.loc[timeline_df["timestamp_ms"] == 0].sort_values("row_index")
+            self.assertEqual([round(value, 1) for value in routing_first_frame["y_m"].tolist()], expected_centerlines)
+            self.assertEqual([round(value, 1) for value in timeline_first_frame["y_m"].tolist()], expected_centerlines)
 
             summary = json.loads(artifacts.simulation_summary.read_text(encoding="utf-8"))
             self.assertIn("experimental_extrapolation_count", summary)
             self.assertGreater(summary["total_row_decisions"], 0)
+            self.assertEqual(summary["speed_clip_state_counts"], {})
             self.assertIn("visual_assets", summary)
         finally:
             shutil.rmtree(export_root, ignore_errors=True)

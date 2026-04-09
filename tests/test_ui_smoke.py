@@ -76,11 +76,11 @@ def build_sample_result() -> SimulationResult:
                     row_state="IN_FIELD",
                     opening_mm=20.0,
                     raw_speed_r_min=298.75,
-                    speed_r_min_cmd=60.0,
+                    speed_r_min_cmd=298.75,
                     model_route="inverse_KAN",
                     mass_state="IN_GLOBAL_SUPPORT",
                     route_mode="NORMAL_IN_RANGE",
-                    speed_clip_state="CLIPPED_TO_60",
+                    speed_clip_state="",
                     confidence_level="HIGH",
                 ),
                 RowDecision(
@@ -95,11 +95,11 @@ def build_sample_result() -> SimulationResult:
                     row_state="IN_FIELD",
                     opening_mm=20.0,
                     raw_speed_r_min=18.4,
-                    speed_r_min_cmd=20.0,
+                    speed_r_min_cmd=18.4,
                     model_route="inverse_MLP",
                     mass_state="BELOW_GLOBAL_SUPPORT",
                     route_mode="EXPERIMENTAL_EXTRAPOLATION",
-                    speed_clip_state="CLIPPED_TO_20",
+                    speed_clip_state="",
                     confidence_level="LOW",
                 ),
             ],
@@ -123,11 +123,11 @@ def build_sample_result() -> SimulationResult:
                     row_state="IN_FIELD",
                     opening_mm=50.0,
                     raw_speed_r_min=72.5,
-                    speed_r_min_cmd=60.0,
+                    speed_r_min_cmd=72.5,
                     model_route="inverse_KAN",
                     mass_state="ABOVE_GLOBAL_SUPPORT",
                     route_mode="EXPERIMENTAL_EXTRAPOLATION",
-                    speed_clip_state="CLIPPED_TO_60",
+                    speed_clip_state="",
                     confidence_level="MEDIUM",
                 ),
                 RowDecision(
@@ -179,17 +179,14 @@ def build_sample_result() -> SimulationResult:
                 "NORMAL_IN_RANGE": 1,
                 "EXPERIMENTAL_EXTRAPOLATION": 2,
             },
-            "speed_clip_state_counts": {
-                "CLIPPED_TO_20": 1,
-                "CLIPPED_TO_60": 2,
-            },
+            "speed_clip_state_counts": {},
             "confidence_level_counts": {
                 "HIGH": 1,
                 "MEDIUM": 1,
                 "LOW": 1,
             },
             "average_target_rate_kg_ha": 220.0,
-            "average_speed_r_min_cmd": 46.6667,
+            "average_speed_r_min_cmd": 129.8833,
             "average_raw_speed_r_min": 129.8833,
         },
     )
@@ -197,6 +194,10 @@ def build_sample_result() -> SimulationResult:
 
 def visible_annotation_texts(annotation_artists: list[object]) -> list[str]:
     return [artist.get_text() for artist in annotation_artists if artist.get_visible()]
+
+
+def scatter_offsets(artist: object) -> list[tuple[float, float]]:
+    return [tuple(float(value) for value in point) for point in artist.get_offsets().tolist()]
 
 
 def sidebar_axes(figure: object, main_ax: object) -> tuple[list[object], list[object]]:
@@ -217,15 +218,8 @@ def expected_decision_table_rows(frame: SimulationFrame) -> list[tuple[str, ...]
             f"{decision.target_rate_kg_ha:.1f}",
             f"{decision.target_mass_g_min:.1f}",
             f"{decision.opening_mm:.1f}" if decision.row_state == "IN_FIELD" else "-",
-            f"{decision.raw_speed_r_min:.2f}" if decision.row_state == "IN_FIELD" else "-",
             f"{decision.speed_r_min_cmd:.2f}" if decision.row_state == "IN_FIELD" else "-",
             decision.model_route or "-",
-            {
-                "NOT_CLIPPED": "未裁剪",
-                "CLIPPED_TO_20": "裁剪到 20 r/min",
-                "CLIPPED_TO_60": "裁剪到 60 r/min",
-                "": "-",
-            }.get(decision.speed_clip_state, decision.speed_clip_state),
             {
                 "NORMAL_INTERPOLATION": "正常插值",
                 "SPEED_EDGE_EXTRAPOLATION": "速度边界外推",
@@ -245,6 +239,66 @@ def decision_table_rows(app: FertilizerApp) -> list[tuple[str, ...]]:
         tuple(str(value) for value in app.decision_table.item(item_id, "values"))
         for item_id in app.decision_table.get_children()
     ]
+
+
+def build_centerline_preview_result() -> SimulationResult:
+    prescription = build_sample_prescription_map()
+    machine_config = MachineConfig(row_count=2, row_spacing_m=0.6, travel_speed_kmh=6.0, sample_period_ms=200)
+    target_mass = target_mass_from_rate(180.0, machine_config.row_spacing_m, machine_config.travel_speed_kmh)
+    frame = SimulationFrame(
+        timestamp_ms=0,
+        pass_id=1,
+        machine_center_x_m=1.4,
+        machine_center_y_m=0.6,
+        direction_sign=1,
+        row_decisions=[
+            RowDecision(
+                timestamp_ms=0,
+                pass_id=1,
+                row_index=1,
+                x_m=1.0,
+                y_m=0.3,
+                zone_id="A1",
+                target_rate_kg_ha=180.0,
+                target_mass_g_min=target_mass,
+                row_state="IN_FIELD",
+                opening_mm=20.0,
+                raw_speed_r_min=30.0,
+                speed_r_min_cmd=30.0,
+                model_route="inverse_KAN",
+                mass_state="IN_GLOBAL_SUPPORT",
+                route_mode="NORMAL_IN_RANGE",
+                speed_clip_state="",
+                confidence_level="HIGH",
+            ),
+            RowDecision(
+                timestamp_ms=0,
+                pass_id=1,
+                row_index=2,
+                x_m=1.8,
+                y_m=0.9,
+                zone_id="A1",
+                target_rate_kg_ha=180.0,
+                target_mass_g_min=target_mass,
+                row_state="IN_FIELD",
+                opening_mm=20.0,
+                raw_speed_r_min=30.0,
+                speed_r_min_cmd=30.0,
+                model_route="inverse_MLP",
+                mass_state="BELOW_GLOBAL_SUPPORT",
+                route_mode="EXPERIMENTAL_EXTRAPOLATION",
+                speed_clip_state="",
+                confidence_level="LOW",
+            ),
+        ],
+    )
+    return SimulationResult(
+        frames=[frame],
+        machine_config=machine_config,
+        prescription_path=prescription.source_path,
+        prescription_cells=prescription.cells,
+        summary={"frame_count": 1, "pass_count": 1, "total_row_decisions": 2},
+    )
 
 
 class UISmokeTests(unittest.TestCase):
@@ -466,6 +520,21 @@ class UISmokeTests(unittest.TestCase):
         self.assertGreater(colorbar_axes[0].get_position().x0, renderer.ax.get_position().x1)
 
         plt.close(renderer.figure)
+
+    def test_preview_renderers_should_use_centerline_coordinates_without_extra_offset(self) -> None:
+        result = build_centerline_preview_result()
+        overview_renderer = create_overview_preview_state(result, frame_index=0)
+        current_renderer = create_current_preview_state(result, frame_index=0, detailed=True)
+
+        for renderer in (overview_renderer, current_renderer):
+            self.assertEqual([round(value, 1) for value in list(renderer.span_artist.get_ydata())], [0.3, 0.9])
+            self.assertEqual(scatter_offsets(renderer.center_artist), [(1.4, 0.6)])
+            self.assertEqual(scatter_offsets(renderer.kan_artist), [(1.0, 0.3)])
+            self.assertEqual(scatter_offsets(renderer.mlp_artist), [(1.8, 0.9)])
+            self.assertEqual(scatter_offsets(renderer.out_artist), [])
+
+        plt.close(overview_renderer.figure)
+        plt.close(current_renderer.figure)
 
     def test_slider_change_should_live_update_overview_annotations_and_release_should_refresh_table(self) -> None:
         app = self.create_app()

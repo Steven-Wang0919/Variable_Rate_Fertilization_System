@@ -21,7 +21,9 @@ class FieldSimulator:
         if pass_spacing <= 0:
             raise ValueError("机器作业幅宽必须大于 0。")
 
-        center_y = prescription_map.bounds.min_y - min_offset
+        # Align the first active row to the first centerline inside the field
+        # instead of placing the outermost row directly on the boundary.
+        center_y = prescription_map.bounds.min_y + float(machine_config.row_spacing_m) / 2.0 - min_offset
         pass_centers: list[float] = []
         while True:
             pass_centers.append(center_y)
@@ -157,7 +159,6 @@ class FieldSimulator:
         model_route_counts = Counter(decision.model_route for decision in in_field_decisions)
         mass_state_counts = Counter(decision.mass_state for decision in in_field_decisions)
         route_mode_counts = Counter(decision.route_mode for decision in in_field_decisions)
-        speed_clip_state_counts = Counter(decision.speed_clip_state for decision in in_field_decisions)
         confidence_level_counts = Counter(decision.confidence_level for decision in in_field_decisions)
         avg_rate = (
             sum(item.target_rate_kg_ha for item in in_field_decisions) / len(in_field_decisions)
@@ -187,7 +188,7 @@ class FieldSimulator:
             "model_route_counts": dict(model_route_counts),
             "mass_state_counts": dict(mass_state_counts),
             "route_mode_counts": dict(route_mode_counts),
-            "speed_clip_state_counts": dict(speed_clip_state_counts),
+            "speed_clip_state_counts": {},
             "confidence_level_counts": dict(confidence_level_counts),
             "average_target_rate_kg_ha": round(avg_rate, 4),
             "average_speed_r_min_cmd": round(avg_speed_cmd, 4),

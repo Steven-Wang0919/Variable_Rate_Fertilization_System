@@ -68,22 +68,22 @@ class InverseRoutingTests(unittest.TestCase):
         raw_speed, speed_cmd, model_route, mass_state, route_mode, clip_state, confidence = self.router.predict(1000.0, 20.0)
 
         self.assertAlmostEqual(raw_speed, 18.0, places=5)
-        self.assertEqual(speed_cmd, 20.0)
+        self.assertEqual(speed_cmd, raw_speed)
         self.assertEqual(model_route, "inverse_MLP")
         self.assertEqual(mass_state, "BELOW_GLOBAL_SUPPORT")
         self.assertEqual(route_mode, "EXPERIMENTAL_EXTRAPOLATION")
-        self.assertEqual(clip_state, "CLIPPED_TO_20")
+        self.assertEqual(clip_state, "")
         self.assertEqual(confidence, "LOW")
 
     def test_predict_should_use_inverse_kan_inside_global_support(self) -> None:
         raw_speed, speed_cmd, model_route, mass_state, route_mode, clip_state, confidence = self.router.predict(4000.0, 35.0)
 
         self.assertAlmostEqual(raw_speed, 44.0, places=5)
-        self.assertEqual(speed_cmd, 44.0)
+        self.assertEqual(speed_cmd, raw_speed)
         self.assertEqual(model_route, "inverse_KAN")
         self.assertEqual(mass_state, "IN_GLOBAL_SUPPORT")
         self.assertEqual(route_mode, "NORMAL_IN_RANGE")
-        self.assertEqual(clip_state, "NOT_CLIPPED")
+        self.assertEqual(clip_state, "")
         self.assertEqual(confidence, "HIGH")
 
     def test_predict_should_use_inverse_kan_for_high_end_experimental_extrapolation(self) -> None:
@@ -94,11 +94,11 @@ class InverseRoutingTests(unittest.TestCase):
         raw_speed, speed_cmd, model_route, mass_state, route_mode, clip_state, confidence = high_clip_router.predict(9000.0, 50.0)
 
         self.assertAlmostEqual(raw_speed, 72.0, places=5)
-        self.assertEqual(speed_cmd, 60.0)
+        self.assertEqual(speed_cmd, raw_speed)
         self.assertEqual(model_route, "inverse_KAN")
         self.assertEqual(mass_state, "ABOVE_GLOBAL_SUPPORT")
         self.assertEqual(route_mode, "EXPERIMENTAL_EXTRAPOLATION")
-        self.assertEqual(clip_state, "CLIPPED_TO_60")
+        self.assertEqual(clip_state, "")
         self.assertEqual(confidence, "MEDIUM")
 
     def test_route_should_reject_na_combinations(self) -> None:

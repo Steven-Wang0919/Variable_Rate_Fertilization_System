@@ -36,10 +36,6 @@ DOUBLE_EXTRAPOLATION_EXPERIMENTAL = "DOUBLE_EXTRAPOLATION_EXPERIMENTAL"
 NORMAL_IN_RANGE = "NORMAL_IN_RANGE"
 EXPERIMENTAL_EXTRAPOLATION = "EXPERIMENTAL_EXTRAPOLATION"
 
-NOT_CLIPPED = "NOT_CLIPPED"
-CLIPPED_TO_20 = "CLIPPED_TO_20"
-CLIPPED_TO_60 = "CLIPPED_TO_60"
-
 HIGH = "HIGH"
 MEDIUM = "MEDIUM"
 LOW = "LOW"
@@ -161,12 +157,3 @@ def inverse_route_for(target_mass_g_min: float, strategy_opening_mm: float) -> I
         f"Unsupported inverse routing combination: mass_state={current_mass_state}, "
         f"strategy_opening_mm={opening_value}"
     )
-
-
-def clip_speed_command(raw_speed_r_min: float) -> tuple[float, str]:
-    value = float(raw_speed_r_min)
-    if value < SPEED_SUPPORT_MIN_R_MIN:
-        return SPEED_SUPPORT_MIN_R_MIN, CLIPPED_TO_20
-    if value > SPEED_SUPPORT_MAX_R_MIN:
-        return SPEED_SUPPORT_MAX_R_MIN, CLIPPED_TO_60
-    return value, NOT_CLIPPED

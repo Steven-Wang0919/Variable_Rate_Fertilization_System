@@ -330,7 +330,7 @@ class FertilizerApp(tk.Tk):
         ttk.Button(simulation_box, text="运行仿真", command=self._run_simulation, style="Primary.TButton").pack(fill=tk.X, pady=(10, 0))
         ttk.Label(
             simulation_box,
-            text="反向路由固定按质量支持域与三档开度选择 inverse_KAN / inverse_MLP，命令速度会自动裁剪到 20-60 r/min。",
+            text="反向路由固定按质量支持域与三档开度选择 inverse_KAN / inverse_MLP，命令速度直接使用模型预测值。",
             style="Note.TLabel",
             wraplength=300,
         ).pack(anchor=tk.W, pady=(8, 0))
@@ -1010,15 +1010,6 @@ class FertilizerApp(tk.Tk):
         }
         return mapping.get(confidence_level, confidence_level)
 
-    def _speed_clip_state_text(self, speed_clip_state: str) -> str:
-        mapping = {
-            "NOT_CLIPPED": "未裁剪",
-            "CLIPPED_TO_20": "裁剪到 20 r/min",
-            "CLIPPED_TO_60": "裁剪到 60 r/min",
-            "": "-",
-        }
-        return mapping.get(speed_clip_state, speed_clip_state)
-
     def _format_forward_prediction_spec(self, result: ForwardPredictionResult) -> str:
         lines = [
             f"输入：开度 {result.opening_mm:.1f} mm，转速 {result.speed_r_min:.2f} r/min",
@@ -1494,17 +1485,15 @@ class FertilizerApp(tk.Tk):
         self._render_preview_tabs(force=True)
 
     def _configure_decision_table_spec(self) -> None:
-        columns = ("row", "zone", "rate", "mass", "opening", "raw_speed", "cmd_speed", "model", "clip", "mode")
+        columns = ("row", "zone", "rate", "mass", "opening", "speed", "model", "mode")
         headings = {
             "row": "行号",
             "zone": "分区",
             "rate": "目标量 (kg/ha)",
             "mass": "目标排肥量 (g/min)",
             "opening": "开度 (mm)",
-            "raw_speed": "原始转速",
-            "cmd_speed": "命令转速",
+            "speed": "目标转速 (r/min)",
             "model": "模型",
-            "clip": "裁剪状态",
             "mode": "路由模式",
         }
         widths = {
@@ -1513,13 +1502,11 @@ class FertilizerApp(tk.Tk):
             "rate": 116,
             "mass": 138,
             "opening": 90,
-            "raw_speed": 96,
-            "cmd_speed": 96,
+            "speed": 116,
             "model": 96,
-            "clip": 108,
             "mode": 126,
         }
-        numeric_columns = {"rate", "mass", "opening", "raw_speed", "cmd_speed"}
+        numeric_columns = {"rate", "mass", "opening", "speed"}
         self.decision_table.configure(columns=columns)
         for column in columns:
             anchor = tk.E if column in numeric_columns else tk.CENTER
@@ -1536,7 +1523,6 @@ class FertilizerApp(tk.Tk):
         model_counts = summary.get("model_route_counts", {})
         row_state_counts = summary.get("row_state_counts", {})
         route_mode_counts = summary.get("route_mode_counts", {})
-        clip_counts = summary.get("speed_clip_state_counts", {})
         self.summary_var.set(
             f"总时间步：{summary.get('frame_count', 0)}\n"
             f"总作业往返：{summary.get('pass_count', 0)}\n"
@@ -1546,10 +1532,8 @@ class FertilizerApp(tk.Tk):
             f"inverse_MLP 调用：{model_counts.get('inverse_MLP', 0)}\n"
             f"地块外点数：{row_state_counts.get('OUT_OF_FIELD', 0)}\n"
             f"实验性外推点数：{route_mode_counts.get('EXPERIMENTAL_EXTRAPOLATION', 0)}\n"
-            f"发生速度裁剪点数：{clip_counts.get('CLIPPED_TO_20', 0) + clip_counts.get('CLIPPED_TO_60', 0)}\n"
             f"平均目标施肥量：{summary.get('average_target_rate_kg_ha', 0)} kg/ha\n"
-            f"平均命令转速：{summary.get('average_speed_r_min_cmd', 0)} r/min\n"
-            f"平均原始转速：{summary.get('average_raw_speed_r_min', 0)} r/min"
+            f"平均转速：{summary.get('average_speed_r_min_cmd', 0)} r/min"
         )
 
     def _refresh_decision_table(self, frame) -> None:
@@ -1569,10 +1553,8 @@ class FertilizerApp(tk.Tk):
                     f"{decision.target_rate_kg_ha:.1f}",
                     f"{decision.target_mass_g_min:.1f}",
                     f"{decision.opening_mm:.1f}" if in_field else "-",
-                    f"{decision.raw_speed_r_min:.2f}" if in_field else "-",
                     f"{decision.speed_r_min_cmd:.2f}" if in_field else "-",
                     decision.model_route or "-",
-                    self._speed_clip_state_text(decision.speed_clip_state),
                     self._route_mode_text(decision.route_mode),
                 ),
                 tags=(tag,),
