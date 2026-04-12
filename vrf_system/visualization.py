@@ -68,23 +68,55 @@ class OverviewPreviewState:
     def _update_annotations(self, frame: SimulationFrame) -> None:
         xlim = tuple(float(value) for value in self.ax.get_xlim())
         ylim = tuple(float(value) for value in self.ax.get_ylim())
+        renderer = _ensure_figure_renderer(self.figure)
+        field_x_bounds = _cells_bounds(list(self.result.prescription_cells))[:2]
+        placed_annotations: list[tuple[object, object]] = []
 
         for annotation, decision in zip(self.annotation_artists, frame.row_decisions):
+            _, vertical_gap = _overview_annotation_gaps(
+                row_spacing_m=self.result.machine_config.row_spacing_m,
+                xlim=xlim,
+                ylim=ylim,
+            )
             label_x, label_y, ha, va = _overview_annotation_position(
                 decision,
                 row_spacing_m=self.result.machine_config.row_spacing_m,
                 xlim=xlim,
                 ylim=ylim,
+                field_x_bounds=field_x_bounds,
             )
-            annotation.set_position((label_x, label_y))
-            annotation.set_text(format_row_annotation(decision))
-            annotation.set_color(_decision_color(decision))
-            annotation.set_ha(ha)
-            annotation.set_va(va)
-            annotation.set_visible(True)
+            _set_annotation_style(
+                annotation,
+                label_x=label_x,
+                label_y=label_y,
+                text=format_row_annotation(decision),
+                color=_decision_color(decision),
+                ha=ha,
+                va=va,
+            )
+            _fit_overview_annotation_y(
+                annotation,
+                decision=decision,
+                ax=self.ax,
+                renderer=renderer,
+                vertical_gap=vertical_gap,
+                ylim=ylim,
+            )
+            placed_annotations.append((annotation, decision))
 
         for annotation in self.annotation_artists[len(frame.row_decisions) :]:
             annotation.set_visible(False)
+
+        _resolve_stacked_annotation_overlaps(
+            placed_annotations,
+            figure=self.figure,
+            ax=self.ax,
+            row_spacing_m=self.result.machine_config.row_spacing_m,
+            ylim=ylim,
+        )
+        horizontal_padding = max(self.result.machine_config.row_spacing_m * 0.16, 0.03)
+        for annotation, _decision in placed_annotations:
+            _fit_annotation_x(annotation, ax=self.ax, renderer=renderer, xlim=xlim, padding=horizontal_padding)
 
 
 @dataclass(slots=True)
@@ -149,12 +181,15 @@ class CurrentFramePreviewState:
                 annotation.set_visible(False)
             return
 
+        field_x_bounds = _cells_bounds(self.cells)[:2]
+        placed_annotations: list[tuple[object, object]] = []
         for annotation, decision in zip(self.annotation_artists, frame.row_decisions):
             label_x, label_y, ha, va = _annotation_position(
                 decision,
                 row_spacing_m=self.result.machine_config.row_spacing_m,
                 xlim=xlim,
                 ylim=ylim,
+                field_x_bounds=field_x_bounds,
             )
             color = _decision_color(decision)
             annotation.set_position((label_x, label_y))
@@ -163,9 +198,18 @@ class CurrentFramePreviewState:
             annotation.set_ha(ha)
             annotation.set_va(va)
             annotation.set_visible(True)
+            placed_annotations.append((annotation, decision))
 
         for annotation in self.annotation_artists[len(frame.row_decisions) :]:
             annotation.set_visible(False)
+
+        _resolve_stacked_annotation_overlaps(
+            placed_annotations,
+            figure=self.figure,
+            ax=self.ax,
+            row_spacing_m=self.result.machine_config.row_spacing_m,
+            ylim=ylim,
+        )
 
 
 def _cells_bounds(cells: list[PrescriptionCell]) -> tuple[float, float, float, float]:
@@ -327,6 +371,169 @@ def _create_annotation_artists(ax, count: int, *, font_size: float) -> list[obje
     ]
 
 
+def _set_annotation_style(
+    annotation,
+    *,
+    label_x: float,
+    label_y: float,
+    text: str,
+    color: str,
+    ha: str,
+    va: str,
+) -> None:
+    annotation.set_position((label_x, label_y))
+    annotation.set_text(text)
+    annotation.set_color(color)
+    annotation.set_ha(ha)
+    annotation.set_va(va)
+    annotation.set_visible(True)
+
+
+def _ensure_figure_renderer(figure):
+    canvas = figure.canvas
+    get_renderer = getattr(canvas, "get_renderer", None)
+    if callable(get_renderer):
+        try:
+            renderer = get_renderer()
+        except Exception:
+            renderer = None
+        if renderer is not None:
+            return renderer
+
+    canvas.draw()
+    get_renderer = getattr(canvas, "get_renderer", None)
+    if not callable(get_renderer):
+        raise RuntimeError("Figure canvas does not expose a renderer")
+    return get_renderer()
+
+
+def _annotation_data_bounds(annotation, ax, renderer) -> tuple[float, float, float, float]:
+    bbox = annotation.get_window_extent(renderer=renderer)
+    data_bounds = ax.transData.inverted().transform(bbox.get_points())
+    return (
+        float(min(data_bounds[0, 0], data_bounds[1, 0])),
+        float(max(data_bounds[0, 0], data_bounds[1, 0])),
+        float(min(data_bounds[0, 1], data_bounds[1, 1])),
+        float(max(data_bounds[0, 1], data_bounds[1, 1])),
+    )
+
+
+def _annotation_data_y_bounds(annotation, ax, renderer) -> tuple[float, float]:
+    _, _, y_min, y_max = _annotation_data_bounds(annotation, ax, renderer)
+    return y_min, y_max
+
+
+def _fit_annotation_x(
+    annotation,
+    *,
+    ax,
+    renderer,
+    xlim: tuple[float, float],
+    padding: float,
+) -> None:
+    label_x, label_y = (float(value) for value in annotation.get_position())
+    x_min, x_max, _, _ = _annotation_data_bounds(annotation, ax, renderer)
+
+    if x_min < xlim[0] + padding:
+        label_x += xlim[0] + padding - x_min
+        annotation.set_position((label_x, label_y))
+        x_min, x_max, _, _ = _annotation_data_bounds(annotation, ax, renderer)
+
+    if x_max > xlim[1] - padding:
+        label_x -= x_max - (xlim[1] - padding)
+        annotation.set_position((label_x, label_y))
+
+
+def _fit_overview_annotation_y(
+    annotation,
+    *,
+    decision,
+    ax,
+    renderer,
+    vertical_gap: float,
+    ylim: tuple[float, float],
+) -> None:
+    label_x, label_y = (float(value) for value in annotation.get_position())
+    y_min, y_max = _annotation_data_y_bounds(annotation, ax, renderer)
+
+    if y_max > ylim[1]:
+        label_y = decision.y_m - vertical_gap
+        annotation.set_position((label_x, label_y))
+        annotation.set_va("top")
+        y_min, y_max = _annotation_data_y_bounds(annotation, ax, renderer)
+
+    if y_min < ylim[0]:
+        label_y = decision.y_m + vertical_gap
+        annotation.set_position((label_x, label_y))
+        annotation.set_va("bottom")
+        y_min, y_max = _annotation_data_y_bounds(annotation, ax, renderer)
+
+    padding = max(vertical_gap * 0.12, 0.02)
+    if y_max > ylim[1]:
+        label_y -= y_max - ylim[1] + padding
+        annotation.set_position((label_x, label_y))
+        y_min, y_max = _annotation_data_y_bounds(annotation, ax, renderer)
+
+    if y_min < ylim[0]:
+        label_y += ylim[0] - y_min + padding
+        annotation.set_position((label_x, label_y))
+
+
+def _shift_annotation_y(annotation, shift: float) -> None:
+    label_x, label_y = (float(value) for value in annotation.get_position())
+    annotation.set_position((label_x, label_y + float(shift)))
+
+
+def _resolve_stacked_annotation_overlaps(
+    placed_annotations: list[tuple[object, object]],
+    *,
+    figure,
+    ax,
+    row_spacing_m: float,
+    ylim: tuple[float, float],
+) -> None:
+    if len(placed_annotations) <= 1:
+        return
+
+    renderer = _ensure_figure_renderer(figure)
+    vertical_padding = max(row_spacing_m * 0.08, 0.02)
+    bounds_padding = max(row_spacing_m * 0.12, 0.03)
+
+    grouped_annotations: dict[str, list[tuple[object, object]]] = {}
+    for annotation, decision in placed_annotations:
+        grouped_annotations.setdefault(str(annotation.get_ha()), []).append((annotation, decision))
+
+    for side_annotations in grouped_annotations.values():
+        if len(side_annotations) <= 1:
+            continue
+
+        ordered_annotations = sorted(side_annotations, key=lambda item: float(item[1].y_m))
+        prev_top: float | None = None
+        for annotation, _decision in ordered_annotations:
+            y_min, y_max = _annotation_data_y_bounds(annotation, ax, renderer)
+            if prev_top is not None and y_min < prev_top + vertical_padding:
+                shift = prev_top + vertical_padding - y_min
+                _shift_annotation_y(annotation, shift)
+                y_min, y_max = _annotation_data_y_bounds(annotation, ax, renderer)
+            prev_top = y_max
+
+        group_bounds = [_annotation_data_y_bounds(annotation, ax, renderer) for annotation, _ in ordered_annotations]
+        group_bottom = min(bound[0] for bound in group_bounds)
+        group_top = max(bound[1] for bound in group_bounds)
+
+        if group_top > ylim[1] - bounds_padding:
+            shift = (ylim[1] - bounds_padding) - group_top
+            for annotation, _decision in ordered_annotations:
+                _shift_annotation_y(annotation, shift)
+            group_bounds = [_annotation_data_y_bounds(annotation, ax, renderer) for annotation, _ in ordered_annotations]
+            group_bottom = min(bound[0] for bound in group_bounds)
+
+        if group_bottom < ylim[0] + bounds_padding:
+            shift = (ylim[0] + bounds_padding) - group_bottom
+            for annotation, _decision in ordered_annotations:
+                _shift_annotation_y(annotation, shift)
+
+
 def _draw_trajectories(ax, result: SimulationResult) -> None:
     pass_points: dict[int, list[tuple[float, float]]] = {}
     for frame in result.frames:
@@ -345,11 +552,19 @@ def _annotation_position(
     row_spacing_m: float,
     xlim: tuple[float, float],
     ylim: tuple[float, float],
+    field_x_bounds: tuple[float, float] | None = None,
 ) -> tuple[float, float, str, str]:
     horizontal_gap = max(row_spacing_m * 0.35, 0.14)
     vertical_gap = max(row_spacing_m * 0.18, 0.10)
+    field_edge_threshold = max(horizontal_gap * 1.2, row_spacing_m * 0.45)
 
-    if decision.x_m <= xlim[0] + horizontal_gap * 1.5:
+    if field_x_bounds is not None and decision.x_m <= field_x_bounds[0] + field_edge_threshold:
+        label_x = decision.x_m - horizontal_gap
+        ha = "right"
+    elif field_x_bounds is not None and decision.x_m >= field_x_bounds[1] - field_edge_threshold:
+        label_x = decision.x_m + horizontal_gap
+        ha = "left"
+    elif decision.x_m <= xlim[0] + horizontal_gap * 1.5:
         label_x = decision.x_m + horizontal_gap
         ha = "left"
     elif decision.x_m >= xlim[1] - horizontal_gap * 1.5:
@@ -384,13 +599,23 @@ def _overview_annotation_position(
     row_spacing_m: float,
     xlim: tuple[float, float],
     ylim: tuple[float, float],
+    field_x_bounds: tuple[float, float] | None = None,
 ) -> tuple[float, float, str, str]:
-    x_span = max(xlim[1] - xlim[0], row_spacing_m * 6, 1.0)
-    y_span = max(ylim[1] - ylim[0], row_spacing_m * 4, 1.0)
-    horizontal_gap = max(row_spacing_m * 0.32, x_span * 0.018, 0.18)
-    vertical_gap = max(row_spacing_m * 0.16, y_span * 0.028, 0.12)
+    horizontal_gap, vertical_gap = _overview_annotation_gaps(
+        row_spacing_m=row_spacing_m,
+        xlim=xlim,
+        ylim=ylim,
+    )
+    field_width = 0.0 if field_x_bounds is None else max(field_x_bounds[1] - field_x_bounds[0], 0.0)
+    field_edge_threshold = max(horizontal_gap * 1.2, row_spacing_m * 0.45, field_width * 0.2)
 
-    if decision.x_m <= xlim[0] + horizontal_gap * 1.5:
+    if field_x_bounds is not None and decision.x_m <= field_x_bounds[0] + field_edge_threshold:
+        label_x = decision.x_m - horizontal_gap
+        ha = "right"
+    elif field_x_bounds is not None and decision.x_m >= field_x_bounds[1] - field_edge_threshold:
+        label_x = decision.x_m + horizontal_gap
+        ha = "left"
+    elif decision.x_m <= xlim[0] + horizontal_gap * 1.5:
         label_x = decision.x_m + horizontal_gap
         ha = "left"
     elif decision.x_m >= xlim[1] - horizontal_gap * 1.5:
@@ -417,6 +642,17 @@ def _overview_annotation_position(
         va = "top"
 
     return label_x, label_y, ha, va
+
+
+def _overview_annotation_gaps(
+    *,
+    row_spacing_m: float,
+    xlim: tuple[float, float],
+    ylim: tuple[float, float],
+) -> tuple[float, float]:
+    x_span = max(xlim[1] - xlim[0], row_spacing_m * 6, 1.0)
+    y_span = max(ylim[1] - ylim[0], row_spacing_m * 4, 1.0)
+    return max(row_spacing_m * 0.32, x_span * 0.018, 0.18), max(row_spacing_m * 0.16, y_span * 0.028, 0.12)
 
 
 def _set_axes_style(ax, xlim: tuple[float, float], ylim: tuple[float, float], title: str) -> None:

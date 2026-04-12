@@ -301,6 +301,165 @@ def build_centerline_preview_result() -> SimulationResult:
     )
 
 
+def build_top_edge_overview_result() -> SimulationResult:
+    cells = [
+        PrescriptionCell(
+            cell_id=f"cell-{column_index}-{row_index}",
+            center_x_m=center_x_m,
+            center_y_m=center_y_m,
+            width_m=3.0,
+            height_m=3.0,
+            target_rate_kg_ha=180.0 + column_index * row_index * 20.0,
+            zone_id=f"Z{column_index}{row_index}",
+        )
+        for column_index, center_x_m in enumerate((1.5, 4.5, 7.5, 10.5), start=1)
+        for row_index, center_y_m in enumerate((1.5, 4.5, 7.5, 10.5), start=1)
+    ]
+    machine_config = MachineConfig(row_count=2, row_spacing_m=0.6, travel_speed_kmh=6.0, sample_period_ms=200)
+    target_mass = target_mass_from_rate(260.0, machine_config.row_spacing_m, machine_config.travel_speed_kmh)
+    frame = SimulationFrame(
+        timestamp_ms=0,
+        pass_id=4,
+        machine_center_x_m=8.4,
+        machine_center_y_m=11.92,
+        direction_sign=1,
+        row_decisions=[
+            RowDecision(
+                timestamp_ms=0,
+                pass_id=4,
+                row_index=2,
+                x_m=8.6,
+                y_m=11.92,
+                zone_id="Z34",
+                target_rate_kg_ha=260.0,
+                target_mass_g_min=target_mass,
+                row_state="IN_FIELD",
+                opening_mm=50.0,
+                raw_speed_r_min=51.2,
+                speed_r_min_cmd=51.2,
+                model_route="inverse_KAN",
+                mass_state="IN_GLOBAL_SUPPORT",
+                route_mode="NORMAL_IN_RANGE",
+                speed_clip_state="",
+                confidence_level="HIGH",
+            ),
+        ],
+    )
+    return SimulationResult(
+        frames=[frame],
+        machine_config=machine_config,
+        prescription_path=Path("tests/top_edge_overview.csv"),
+        prescription_cells=cells,
+        summary={"frame_count": 1, "pass_count": 1, "total_row_decisions": 1},
+    )
+
+
+def build_left_edge_overview_result() -> SimulationResult:
+    cells = [
+        PrescriptionCell(
+            cell_id=f"cell-{column_index}-{row_index}",
+            center_x_m=center_x_m,
+            center_y_m=center_y_m,
+            width_m=3.0,
+            height_m=3.0,
+            target_rate_kg_ha=180.0 + column_index * row_index * 20.0,
+            zone_id=f"Z{column_index}{row_index}",
+        )
+        for column_index, center_x_m in enumerate((1.5, 4.5, 7.5, 10.5), start=1)
+        for row_index, center_y_m in enumerate((1.5, 4.5, 7.5, 10.5), start=1)
+    ]
+    machine_config = MachineConfig(row_count=6, row_spacing_m=0.6, travel_speed_kmh=6.0, sample_period_ms=300)
+    target_mass = target_mass_from_rate(260.0, machine_config.row_spacing_m, machine_config.travel_speed_kmh)
+    rows = [
+        RowDecision(
+            timestamp_ms=0,
+            pass_id=1,
+            row_index=row_index,
+            x_m=1.65,
+            y_m=0.3 + (row_index - 1) * 0.6,
+            zone_id="A",
+            target_rate_kg_ha=260.0,
+            target_mass_g_min=target_mass,
+            row_state="IN_FIELD",
+            opening_mm=20.0,
+            raw_speed_r_min=27.2 if row_index < 6 else 31.4,
+            speed_r_min_cmd=27.2 if row_index < 6 else 31.4,
+            model_route="inverse_KAN",
+            mass_state="IN_GLOBAL_SUPPORT",
+            route_mode="NORMAL_IN_RANGE",
+            speed_clip_state="",
+            confidence_level="HIGH",
+        )
+        for row_index in range(1, 7)
+    ]
+    frame = SimulationFrame(
+        timestamp_ms=0,
+        pass_id=1,
+        machine_center_x_m=1.65,
+        machine_center_y_m=1.8,
+        direction_sign=1,
+        row_decisions=rows,
+    )
+    return SimulationResult(
+        frames=[frame],
+        machine_config=machine_config,
+        prescription_path=Path("tests/left_edge_overview.csv"),
+        prescription_cells=cells,
+        summary={"frame_count": 1, "pass_count": 1, "total_row_decisions": len(rows)},
+    )
+
+
+def build_left_edge_current_result() -> SimulationResult:
+    cell = PrescriptionCell(
+        cell_id="cell-left-edge",
+        center_x_m=1.5,
+        center_y_m=3.0,
+        width_m=3.0,
+        height_m=6.0,
+        target_rate_kg_ha=260.0,
+        zone_id="A",
+    )
+    machine_config = MachineConfig(row_count=6, row_spacing_m=0.6, travel_speed_kmh=6.0, sample_period_ms=300)
+    target_mass = target_mass_from_rate(260.0, machine_config.row_spacing_m, machine_config.travel_speed_kmh)
+    rows = [
+        RowDecision(
+            timestamp_ms=0,
+            pass_id=1,
+            row_index=row_index,
+            x_m=0.0,
+            y_m=0.3 + (row_index - 1) * 0.6,
+            zone_id="A",
+            target_rate_kg_ha=260.0,
+            target_mass_g_min=target_mass,
+            row_state="IN_FIELD",
+            opening_mm=20.0,
+            raw_speed_r_min=27.2 if row_index < 6 else 31.4,
+            speed_r_min_cmd=27.2 if row_index < 6 else 31.4,
+            model_route="inverse_KAN",
+            mass_state="IN_GLOBAL_SUPPORT",
+            route_mode="NORMAL_IN_RANGE",
+            speed_clip_state="",
+            confidence_level="HIGH",
+        )
+        for row_index in range(1, 7)
+    ]
+    frame = SimulationFrame(
+        timestamp_ms=0,
+        pass_id=1,
+        machine_center_x_m=0.0,
+        machine_center_y_m=1.8,
+        direction_sign=1,
+        row_decisions=rows,
+    )
+    return SimulationResult(
+        frames=[frame],
+        machine_config=machine_config,
+        prescription_path=Path("tests/left_edge_current.csv"),
+        prescription_cells=[cell],
+        summary={"frame_count": 1, "pass_count": 1, "total_row_decisions": len(rows)},
+    )
+
+
 class UISmokeTests(unittest.TestCase):
     def create_app(self) -> FertilizerApp:
         try:
@@ -503,6 +662,45 @@ class UISmokeTests(unittest.TestCase):
             visible_annotation_texts(renderer.annotation_artists),
             [format_row_annotation(decision) for decision in result.frames[0].row_decisions],
         )
+
+        plt.close(renderer.figure)
+
+    def test_overview_preview_should_keep_top_edge_annotations_inside_axes(self) -> None:
+        result = build_top_edge_overview_result()
+        renderer = create_overview_preview_state(result, frame_index=0)
+        renderer.figure.canvas.draw()
+
+        annotation = next(artist for artist in renderer.annotation_artists if artist.get_visible())
+        bbox = annotation.get_window_extent(renderer=renderer.figure.canvas.get_renderer())
+        data_bbox = renderer.ax.transData.inverted().transform(bbox.get_points())
+
+        self.assertEqual(annotation.get_text(), format_row_annotation(result.frames[0].row_decisions[0]))
+        self.assertEqual(annotation.get_va(), "top")
+        self.assertLessEqual(float(max(data_bbox[0, 1], data_bbox[1, 1])), float(renderer.ax.get_ylim()[1]) + 1e-6)
+
+        plt.close(renderer.figure)
+
+    def test_overview_preview_should_stack_left_edge_annotations_without_overlap(self) -> None:
+        result = build_left_edge_overview_result()
+        renderer = create_overview_preview_state(result, frame_index=0)
+        renderer.figure.canvas.draw()
+
+        visible_annotations = renderer.annotation_artists[: len(result.frames[0].row_decisions)]
+        previous_top = None
+        for annotation in visible_annotations:
+            bbox = annotation.get_window_extent(renderer=renderer.figure.canvas.get_renderer())
+            data_bbox = renderer.ax.transData.inverted().transform(bbox.get_points())
+            annotation_left = float(min(data_bbox[0, 0], data_bbox[1, 0]))
+            annotation_right = float(max(data_bbox[0, 0], data_bbox[1, 0]))
+            annotation_bottom = float(min(data_bbox[0, 1], data_bbox[1, 1]))
+            annotation_top = float(max(data_bbox[0, 1], data_bbox[1, 1]))
+
+            self.assertEqual(annotation.get_ha(), "right")
+            self.assertGreaterEqual(annotation_left, float(renderer.ax.get_xlim()[0]) - 1e-6)
+            self.assertLessEqual(annotation_right, 1.65 + 1e-6)
+            if previous_top is not None:
+                self.assertGreaterEqual(annotation_bottom, previous_top - 1e-6)
+            previous_top = annotation_top
 
         plt.close(renderer.figure)
 
@@ -816,6 +1014,28 @@ class UISmokeTests(unittest.TestCase):
         self.assertIsNone(renderer.ax.get_legend())
         self.assertGreater(legend_axes[0].get_position().x0, renderer.ax.get_position().x1)
         self.assertGreater(colorbar_axes[0].get_position().x0, renderer.ax.get_position().x1)
+
+        plt.close(renderer.figure)
+
+    def test_current_preview_should_place_left_edge_annotations_outside_field(self) -> None:
+        result = build_left_edge_current_result()
+        renderer = create_current_preview_state(result, frame_index=0, detailed=True)
+        renderer.figure.canvas.draw()
+
+        field_left = min(cell.left for cell in result.prescription_cells)
+        visible_annotations = renderer.annotation_artists[: len(result.frames[0].row_decisions)]
+        previous_top = None
+        for annotation in visible_annotations:
+            bbox = annotation.get_window_extent(renderer=renderer.figure.canvas.get_renderer())
+            data_bbox = renderer.ax.transData.inverted().transform(bbox.get_points())
+            annotation_bottom = float(min(data_bbox[0, 1], data_bbox[1, 1]))
+            annotation_top = float(max(data_bbox[0, 1], data_bbox[1, 1]))
+
+            self.assertEqual(annotation.get_ha(), "right")
+            self.assertLessEqual(float(max(data_bbox[0, 0], data_bbox[1, 0])), field_left + 1e-6)
+            if previous_top is not None:
+                self.assertGreaterEqual(annotation_bottom, previous_top - 1e-6)
+            previous_top = annotation_top
 
         plt.close(renderer.figure)
 
