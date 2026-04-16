@@ -5,7 +5,7 @@ from collections import Counter
 from .domain import MachineConfig, SimulationFrame, SimulationResult
 from .engine import ModelRouter, build_row_decision, target_mass_from_rate
 from .prescription import PrescriptionMap
-from .routing_spec import EXPERIMENTAL_EXTRAPOLATION, IN_FIELD, OUT_OF_FIELD
+from .routing_spec import INVERSE_EXTRAPOLATION_ROUTE_MODES, IN_FIELD, OUT_OF_FIELD
 
 
 class FieldSimulator:
@@ -176,7 +176,7 @@ class FieldSimulator:
             else 0.0
         )
         extrapolation_count = sum(
-            1 for item in in_field_decisions if item.route_mode == EXPERIMENTAL_EXTRAPOLATION
+            1 for item in in_field_decisions if item.route_mode in INVERSE_EXTRAPOLATION_ROUTE_MODES
         )
         return {
             "frame_count": len(frames),

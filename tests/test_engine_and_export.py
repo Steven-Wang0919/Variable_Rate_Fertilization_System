@@ -22,10 +22,12 @@ from vrf_system.prescription import PrescriptionMap
 from vrf_system.routing_spec import (
     ABOVE_GLOBAL_SUPPORT,
     BELOW_GLOBAL_SUPPORT,
-    EXPERIMENTAL_EXTRAPOLATION,
+    HIGH_TAIL_EXTRAPOLATION,
     IN_GLOBAL_SUPPORT,
     INVERSE_KAN,
     INVERSE_MLP,
+    LOW_TAIL_FAR_EXTRAPOLATION,
+    LOW_TAIL_NEAR_EXTRAPOLATION,
     NORMAL_IN_RANGE,
 )
 from vrf_system.simulator import FieldSimulator
@@ -181,7 +183,12 @@ class EngineAndExportTests(unittest.TestCase):
         )
         self.assertEqual(
             {item.route_mode for item in decisions},
-            {NORMAL_IN_RANGE, EXPERIMENTAL_EXTRAPOLATION},
+            {
+                NORMAL_IN_RANGE,
+                LOW_TAIL_NEAR_EXTRAPOLATION,
+                LOW_TAIL_FAR_EXTRAPOLATION,
+                HIGH_TAIL_EXTRAPOLATION,
+            },
         )
         self.assertEqual(
             {item.opening_mm for item in decisions},
@@ -189,18 +196,25 @@ class EngineAndExportTests(unittest.TestCase):
         )
 
         zone_expectations = {
-            "EL": (BELOW_GLOBAL_SUPPORT, 20.0, INVERSE_MLP),
+            "ELF": (BELOW_GLOBAL_SUPPORT, 20.0, INVERSE_MLP, LOW_TAIL_FAR_EXTRAPOLATION),
+            "ELN": (BELOW_GLOBAL_SUPPORT, 20.0, INVERSE_KAN, LOW_TAIL_NEAR_EXTRAPOLATION),
             "L": (IN_GLOBAL_SUPPORT, 20.0, INVERSE_KAN),
             "M": (IN_GLOBAL_SUPPORT, 35.0, INVERSE_KAN),
             "H": (IN_GLOBAL_SUPPORT, 50.0, INVERSE_KAN),
-            "EH": (ABOVE_GLOBAL_SUPPORT, 50.0, INVERSE_KAN),
+            "EH": (ABOVE_GLOBAL_SUPPORT, 50.0, INVERSE_KAN, HIGH_TAIL_EXTRAPOLATION),
         }
-        for zone_id, (mass_state, opening_mm, model_route) in zone_expectations.items():
+        for zone_id, expectation in zone_expectations.items():
             zone_decisions = [item for item in decisions if item.zone_id == zone_id]
             self.assertGreater(len(zone_decisions), 0, zone_id)
+            if len(expectation) == 4:
+                mass_state, opening_mm, model_route, route_mode = expectation
+            else:
+                mass_state, opening_mm, model_route = expectation
+                route_mode = NORMAL_IN_RANGE
             self.assertTrue(all(item.mass_state == mass_state for item in zone_decisions), zone_id)
             self.assertTrue(all(item.opening_mm == opening_mm for item in zone_decisions), zone_id)
             self.assertTrue(all(item.model_route == model_route for item in zone_decisions), zone_id)
+            self.assertTrue(all(item.route_mode == route_mode for item in zone_decisions), zone_id)
 
         summary = result.summary
         self.assertEqual(
@@ -213,5 +227,14 @@ class EngineAndExportTests(unittest.TestCase):
         )
         self.assertEqual(
             set(summary["route_mode_counts"].keys()),
-            {NORMAL_IN_RANGE, EXPERIMENTAL_EXTRAPOLATION},
+            {
+                NORMAL_IN_RANGE,
+                LOW_TAIL_NEAR_EXTRAPOLATION,
+                LOW_TAIL_FAR_EXTRAPOLATION,
+                HIGH_TAIL_EXTRAPOLATION,
+            },
+        )
+        self.assertEqual(
+            summary["experimental_extrapolation_count"],
+            sum(1 for item in decisions if item.route_mode != NORMAL_IN_RANGE),
         )

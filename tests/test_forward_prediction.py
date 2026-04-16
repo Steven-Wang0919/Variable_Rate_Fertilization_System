@@ -90,12 +90,22 @@ class ForwardPredictionControllerTests(unittest.TestCase):
     def test_predict_forward_mass_should_keep_forward_kan_for_speed_only_extrapolation(self) -> None:
         result = self.controller.predict_forward_mass(35.0, 10.0)
 
-        self.assertAlmostEqual(result.mass_hat_g_min, 50.0, places=5)
-        self.assertEqual(result.model_route, "forward_KAN")
+        self.assertAlmostEqual(result.mass_hat_g_min, 75.0, places=5)
+        self.assertEqual(result.model_route, "forward_MLP")
         self.assertEqual(result.opening_state, "IN_OPENING_SUPPORT")
         self.assertEqual(result.speed_state, "BELOW_SPEED_SUPPORT")
         self.assertEqual(result.route_mode, "SPEED_EDGE_EXTRAPOLATION")
-        self.assertEqual(result.confidence_level, "MEDIUM")
+        self.assertEqual(result.confidence_level, "LOW")
+
+    def test_predict_forward_mass_should_use_forward_mlp_for_high_speed_extrapolation(self) -> None:
+        result = self.controller.predict_forward_mass(35.0, 70.0)
+
+        self.assertAlmostEqual(result.mass_hat_g_min, 75.0, places=5)
+        self.assertEqual(result.model_route, "forward_MLP")
+        self.assertEqual(result.opening_state, "IN_OPENING_SUPPORT")
+        self.assertEqual(result.speed_state, "ABOVE_SPEED_SUPPORT")
+        self.assertEqual(result.route_mode, "SPEED_EDGE_EXTRAPOLATION")
+        self.assertEqual(result.confidence_level, "LOW")
 
     def test_predict_forward_mass_should_use_forward_mlp_for_opening_extrapolation(self) -> None:
         result = self.controller.predict_forward_mass(10.0, 40.0)
@@ -107,15 +117,9 @@ class ForwardPredictionControllerTests(unittest.TestCase):
         self.assertEqual(result.route_mode, "OPENING_EXTRAPOLATION")
         self.assertEqual(result.confidence_level, "LOW")
 
-    def test_predict_forward_mass_should_use_forward_mlp_for_double_extrapolation(self) -> None:
-        result = self.controller.predict_forward_mass(10.0, 10.0)
-
-        self.assertAlmostEqual(result.mass_hat_g_min, 75.0, places=5)
-        self.assertEqual(result.model_route, "forward_MLP")
-        self.assertEqual(result.opening_state, "OUT_OF_OPENING_SUPPORT")
-        self.assertEqual(result.speed_state, "BELOW_SPEED_SUPPORT")
-        self.assertEqual(result.route_mode, "DOUBLE_EXTRAPOLATION_EXPERIMENTAL")
-        self.assertEqual(result.confidence_level, "LOW")
+    def test_predict_forward_mass_should_reject_double_extrapolation(self) -> None:
+        with self.assertRaisesRegex(ValueError, "暂不支持双越界预测"):
+            self.controller.predict_forward_mass(10.0, 10.0)
 
     def test_predict_forward_mass_should_not_clamp_negative_output(self) -> None:
         self.controller.forward_kan_bundle = build_forward_bundle(

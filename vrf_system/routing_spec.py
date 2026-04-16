@@ -32,9 +32,22 @@ NORMAL_INTERPOLATION = "NORMAL_INTERPOLATION"
 SPEED_EDGE_EXTRAPOLATION = "SPEED_EDGE_EXTRAPOLATION"
 OPENING_EXTRAPOLATION = "OPENING_EXTRAPOLATION"
 DOUBLE_EXTRAPOLATION_EXPERIMENTAL = "DOUBLE_EXTRAPOLATION_EXPERIMENTAL"
+FORWARD_DOUBLE_EXTRAPOLATION_UNSUPPORTED_MESSAGE = "暂不支持双越界预测"
 
 NORMAL_IN_RANGE = "NORMAL_IN_RANGE"
 EXPERIMENTAL_EXTRAPOLATION = "EXPERIMENTAL_EXTRAPOLATION"
+LOW_TAIL_NEAR_EXTRAPOLATION = "LOW_TAIL_NEAR_EXTRAPOLATION"
+LOW_TAIL_FAR_EXTRAPOLATION = "LOW_TAIL_FAR_EXTRAPOLATION"
+HIGH_TAIL_EXTRAPOLATION = "HIGH_TAIL_EXTRAPOLATION"
+LOW_TAIL_NEAR_THRESHOLD_PCT = 20.0
+INVERSE_EXTRAPOLATION_ROUTE_MODES = frozenset(
+    (
+        EXPERIMENTAL_EXTRAPOLATION,
+        LOW_TAIL_NEAR_EXTRAPOLATION,
+        LOW_TAIL_FAR_EXTRAPOLATION,
+        HIGH_TAIL_EXTRAPOLATION,
+    )
+)
 
 HIGH = "HIGH"
 MEDIUM = "MEDIUM"
@@ -101,20 +114,20 @@ def forward_route_for(opening_mm: float, speed_r_min: float) -> ForwardRoute:
     current_opening_state = opening_state(opening_mm)
     current_speed_state = speed_state(speed_r_min)
 
-    if current_opening_state == IN_OPENING_SUPPORT:
+    if current_opening_state == OUT_OF_OPENING_SUPPORT and current_speed_state != IN_SPEED_SUPPORT:
+        raise ValueError(FORWARD_DOUBLE_EXTRAPOLATION_UNSUPPORTED_MESSAGE)
+
+    if current_opening_state == IN_OPENING_SUPPORT and current_speed_state == IN_SPEED_SUPPORT:
         model_route = FORWARD_KAN
-        if current_speed_state == IN_SPEED_SUPPORT:
-            route_mode = NORMAL_INTERPOLATION
-            confidence_level = HIGH
-        else:
-            route_mode = SPEED_EDGE_EXTRAPOLATION
-            confidence_level = MEDIUM
+        route_mode = NORMAL_INTERPOLATION
+        confidence_level = HIGH
+    elif current_opening_state == IN_OPENING_SUPPORT:
+        model_route = FORWARD_MLP
+        route_mode = SPEED_EDGE_EXTRAPOLATION
+        confidence_level = LOW
     else:
         model_route = FORWARD_MLP
-        if current_speed_state == IN_SPEED_SUPPORT:
-            route_mode = OPENING_EXTRAPOLATION
-        else:
-            route_mode = DOUBLE_EXTRAPOLATION_EXPERIMENTAL
+        route_mode = OPENING_EXTRAPOLATION
         confidence_level = LOW
 
     return ForwardRoute(
@@ -139,21 +152,30 @@ def inverse_route_for(target_mass_g_min: float, strategy_opening_mm: float) -> I
             route_mode=NORMAL_IN_RANGE,
             confidence_level=HIGH,
         )
-    if current_mass_state == BELOW_GLOBAL_SUPPORT and opening_value == STRATEGY_OPENINGS_MM[0]:
+    if current_mass_state == BELOW_GLOBAL_SUPPORT:
+        pct_low = (
+            (GLOBAL_MASS_SUPPORT_MIN_G_MIN - float(target_mass_g_min))
+            / GLOBAL_MASS_SUPPORT_MIN_G_MIN
+            * 100.0
+        )
+        if pct_low < LOW_TAIL_NEAR_THRESHOLD_PCT:
+            return InverseRoute(
+                model_route=INVERSE_KAN,
+                mass_state=current_mass_state,
+                route_mode=LOW_TAIL_NEAR_EXTRAPOLATION,
+                confidence_level=MEDIUM,
+            )
         return InverseRoute(
             model_route=INVERSE_MLP,
             mass_state=current_mass_state,
-            route_mode=EXPERIMENTAL_EXTRAPOLATION,
+            route_mode=LOW_TAIL_FAR_EXTRAPOLATION,
             confidence_level=LOW,
         )
-    if current_mass_state == ABOVE_GLOBAL_SUPPORT and opening_value == STRATEGY_OPENINGS_MM[2]:
+    if current_mass_state == ABOVE_GLOBAL_SUPPORT:
         return InverseRoute(
             model_route=INVERSE_KAN,
             mass_state=current_mass_state,
-            route_mode=EXPERIMENTAL_EXTRAPOLATION,
+            route_mode=HIGH_TAIL_EXTRAPOLATION,
             confidence_level=MEDIUM,
         )
-    raise ValueError(
-        f"Unsupported inverse routing combination: mass_state={current_mass_state}, "
-        f"strategy_opening_mm={opening_value}"
-    )
+    raise ValueError(f"Unsupported inverse routing state: {current_mass_state}")

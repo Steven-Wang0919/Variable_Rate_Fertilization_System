@@ -299,7 +299,25 @@ def _cell_intersects_window(
     )
 
 
-def _draw_cells(ax, cells: list[PrescriptionCell], norm: mcolors.Normalize, show_labels: bool = True) -> None:
+def _cell_label_font_size(cells: list[PrescriptionCell]) -> float:
+    if not cells:
+        return 8.0
+
+    x_centers = {round(cell.center_x_m, 6) for cell in cells}
+    y_centers = {round(cell.center_y_m, 6) for cell in cells}
+    grid_scale = max(len(x_centers), len(y_centers))
+    return max(4.6, 8.0 - 0.8 * max(grid_scale - 4, 0))
+
+
+def _draw_cells(
+    ax,
+    cells: list[PrescriptionCell],
+    norm: mcolors.Normalize,
+    show_labels: bool = True,
+    *,
+    label_font_size: float | None = None,
+) -> None:
+    font_size = _cell_label_font_size(cells) if label_font_size is None else label_font_size
     for cell in cells:
         color = MAP_CMAP(norm(cell.target_rate_kg_ha))
         rect = Rectangle(
@@ -319,12 +337,19 @@ def _draw_cells(ax, cells: list[PrescriptionCell], norm: mcolors.Normalize, show
                 f"{cell.zone_id}\n{cell.target_rate_kg_ha:.0f}",
                 ha="center",
                 va="center",
-                fontsize=8,
+                fontsize=font_size,
                 color="#0f172a",
             )
 
 
-def _draw_cells_with_handles(ax, cells: list[PrescriptionCell], norm: mcolors.Normalize) -> tuple[list[Rectangle], list[object]]:
+def _draw_cells_with_handles(
+    ax,
+    cells: list[PrescriptionCell],
+    norm: mcolors.Normalize,
+    *,
+    label_font_size: float | None = None,
+) -> tuple[list[Rectangle], list[object]]:
+    font_size = _cell_label_font_size(cells) if label_font_size is None else label_font_size
     patches: list[Rectangle] = []
     labels: list[object] = []
     for cell in cells:
@@ -345,7 +370,7 @@ def _draw_cells_with_handles(ax, cells: list[PrescriptionCell], norm: mcolors.No
             f"{cell.zone_id}\n{cell.target_rate_kg_ha:.0f}",
             ha="center",
             va="center",
-            fontsize=8,
+            fontsize=font_size,
             color="#0f172a",
         )
         patches.append(patch)
@@ -716,6 +741,7 @@ def _add_marker_legend(legend_ax) -> None:
 def create_overview_preview_state(result: SimulationResult, frame_index: int = 0) -> OverviewPreviewState:
     cells = list(result.prescription_cells)
     xlim, ylim, norm = _prescription_extent(cells)
+    label_font_size = _cell_label_font_size(cells)
 
     fig, ax, legend_ax, colorbar_ax = _create_preview_figure_layout(
         figsize=(11.5, 8.2),
@@ -723,7 +749,7 @@ def create_overview_preview_state(result: SimulationResult, frame_index: int = 0
         top=0.92,
         bottom=0.10,
     )
-    _draw_cells(ax, cells, norm, show_labels=len(cells) <= 30)
+    _draw_cells(ax, cells, norm, label_font_size=label_font_size)
     _draw_trajectories(ax, result)
     span_artist, = ax.plot([], [], color=SPAN_COLOR, linewidth=2.2, alpha=0.85, zorder=4)
     center_artist = ax.scatter([], [], color=SPAN_COLOR, marker="*", s=120, zorder=5)
@@ -759,6 +785,7 @@ def create_current_preview_state(
 ) -> CurrentFramePreviewState:
     cells = list(result.prescription_cells)
     norm = _norm_from_cells(cells)
+    label_font_size = _cell_label_font_size(cells)
 
     fig, ax, legend_ax, colorbar_ax = _create_preview_figure_layout(
         figsize=(10.5, 7.2),
@@ -766,7 +793,7 @@ def create_current_preview_state(
         top=0.90,
         bottom=0.10,
     )
-    cell_patches, cell_labels = _draw_cells_with_handles(ax, cells, norm)
+    cell_patches, cell_labels = _draw_cells_with_handles(ax, cells, norm, label_font_size=label_font_size)
     _draw_trajectories(ax, result)
     span_artist, = ax.plot([], [], color=SPAN_COLOR, linewidth=2.2, alpha=0.85, zorder=4)
     center_artist = ax.scatter([], [], color=SPAN_COLOR, marker="*", s=120, zorder=5)
@@ -847,9 +874,10 @@ def create_legend_figure(result: SimulationResult):
 def create_prescription_overview_figure(prescription: PrescriptionMap):
     cells = list(prescription.cells)
     xlim, ylim, norm = _prescription_extent(cells)
+    label_font_size = _cell_label_font_size(cells)
 
     fig, ax = plt.subplots(figsize=(11.5, 8.2), dpi=160)
-    _draw_cells(ax, cells, norm, show_labels=len(cells) <= 30)
+    _draw_cells(ax, cells, norm, label_font_size=label_font_size)
     _set_axes_style(ax, xlim, ylim, "处方图总览")
     fig.subplots_adjust(left=0.08, right=0.88, top=0.92, bottom=0.10)
     cax = fig.add_axes([0.90, 0.10, 0.03, 0.82])

@@ -67,11 +67,22 @@ class InverseRoutingTests(unittest.TestCase):
     def test_predict_should_use_inverse_mlp_for_low_end_experimental_extrapolation(self) -> None:
         raw_speed, speed_cmd, model_route, mass_state, route_mode, clip_state, confidence = self.router.predict(1000.0, 20.0)
 
+        self.assertAlmostEqual(raw_speed, 44.0, places=5)
+        self.assertEqual(speed_cmd, raw_speed)
+        self.assertEqual(model_route, "inverse_KAN")
+        self.assertEqual(mass_state, "BELOW_GLOBAL_SUPPORT")
+        self.assertEqual(route_mode, "LOW_TAIL_NEAR_EXTRAPOLATION")
+        self.assertEqual(clip_state, "")
+        self.assertEqual(confidence, "MEDIUM")
+
+    def test_predict_should_use_inverse_mlp_for_low_end_far_extrapolation(self) -> None:
+        raw_speed, speed_cmd, model_route, mass_state, route_mode, clip_state, confidence = self.router.predict(900.0, 20.0)
+
         self.assertAlmostEqual(raw_speed, 18.0, places=5)
         self.assertEqual(speed_cmd, raw_speed)
         self.assertEqual(model_route, "inverse_MLP")
         self.assertEqual(mass_state, "BELOW_GLOBAL_SUPPORT")
-        self.assertEqual(route_mode, "EXPERIMENTAL_EXTRAPOLATION")
+        self.assertEqual(route_mode, "LOW_TAIL_FAR_EXTRAPOLATION")
         self.assertEqual(clip_state, "")
         self.assertEqual(confidence, "LOW")
 
@@ -97,12 +108,10 @@ class InverseRoutingTests(unittest.TestCase):
         self.assertEqual(speed_cmd, raw_speed)
         self.assertEqual(model_route, "inverse_KAN")
         self.assertEqual(mass_state, "ABOVE_GLOBAL_SUPPORT")
-        self.assertEqual(route_mode, "EXPERIMENTAL_EXTRAPOLATION")
+        self.assertEqual(route_mode, "HIGH_TAIL_EXTRAPOLATION")
         self.assertEqual(clip_state, "")
         self.assertEqual(confidence, "MEDIUM")
 
-    def test_route_should_reject_na_combinations(self) -> None:
-        with self.assertRaisesRegex(ValueError, "Unsupported inverse routing combination"):
-            self.router.route(1000.0, 35.0)
-        with self.assertRaisesRegex(ValueError, "Unsupported inverse routing combination"):
-            self.router.route(9000.0, 20.0)
+    def test_route_should_reject_non_strategy_opening(self) -> None:
+        with self.assertRaisesRegex(ValueError, "Unsupported strategy opening"):
+            self.router.route(4000.0, 30.0)

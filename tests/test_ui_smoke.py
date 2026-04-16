@@ -20,7 +20,11 @@ from vrf_system.domain import (
 from vrf_system.engine import target_mass_from_rate
 from vrf_system.prescription import PrescriptionMap
 from vrf_system.ui import FertilizerApp
-from vrf_system.visualization import create_current_preview_state, create_overview_preview_state
+from vrf_system.visualization import (
+    create_current_preview_state,
+    create_overview_preview_state,
+    create_prescription_overview_figure,
+)
 
 
 def build_sample_prescription_map() -> PrescriptionMap:
@@ -718,6 +722,26 @@ class UISmokeTests(unittest.TestCase):
         self.assertGreater(colorbar_axes[0].get_position().x0, renderer.ax.get_position().x1)
 
         plt.close(renderer.figure)
+
+    def test_prescription_overview_should_keep_large_grid_labels_visible_with_smaller_font(self) -> None:
+        small_prescription = build_sample_prescription_map()
+        large_prescription = PrescriptionMap.from_csv(Path("samples/prescription_grid_showcase.csv"))
+
+        small_figure = create_prescription_overview_figure(small_prescription)
+        large_figure = create_prescription_overview_figure(large_prescription)
+
+        small_ax = small_figure.axes[0]
+        large_ax = large_figure.axes[0]
+        small_labels = [text for text in small_ax.texts if text.get_text()]
+        large_labels = [text for text in large_ax.texts if text.get_text()]
+
+        self.assertEqual(len(large_labels), len(large_prescription.cells))
+        self.assertTrue(all(text.get_visible() for text in large_labels))
+        self.assertLess(large_labels[0].get_fontsize(), small_labels[0].get_fontsize())
+        self.assertIn("\n", large_labels[0].get_text())
+
+        plt.close(small_figure)
+        plt.close(large_figure)
 
     def test_preview_renderers_should_use_centerline_coordinates_without_extra_offset(self) -> None:
         result = build_centerline_preview_result()
