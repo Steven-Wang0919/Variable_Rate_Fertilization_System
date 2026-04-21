@@ -147,12 +147,12 @@ python -m unittest discover -s tests -v
 
 默认模型工件读取以下目录：
 
-- [inverse_KAN](D:/Personal/eclipse_workspace/12.10/ComPare/runs/20260326T200342_compare_all/artifacts/inverse/inverse_KAN)
-- [inverse_MLP](D:/Personal/eclipse_workspace/12.10/ComPare/runs/20260326T200342_compare_all/artifacts/inverse/inverse_MLP)
-- [forward_KAN](D:/Personal/eclipse_workspace/12.10/ComPare/runs/20260326T200342_compare_all/artifacts/forward/KAN)
+- [inverse_KAN](D:/Personal/eclipse_workspace/12.10/ComPare/runs/20260422T001922_compare_all/artifacts/inverse/inverse_KAN)
+- [inverse_MLP](D:/Personal/eclipse_workspace/12.10/ComPare/runs/20260422T001922_compare_all/artifacts/inverse/inverse_MLP)
+- [forward_KAN](D:/Personal/eclipse_workspace/12.10/ComPare/runs/20260422T001922_compare_all/artifacts/forward/KAN)
 
 前向 KAN 的参考预测文件位于：
 
-- [forward_model_predictions.csv](D:/Personal/eclipse_workspace/12.10/ComPare/runs/20260326T200342_compare_all/forward_model_predictions.csv)
+- [forward_model_predictions.csv](D:/Personal/eclipse_workspace/12.10/ComPare/runs/20260422T001922_compare_all/forward_model_predictions.csv)
 
 如果后续你重新训练并导出了新模型，也可以在界面中选择新的模型目录重新加载。

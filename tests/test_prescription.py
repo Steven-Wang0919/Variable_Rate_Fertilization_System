@@ -87,7 +87,7 @@ class PrescriptionMapTests(unittest.TestCase):
         self.assertEqual(prescription.rate_range(), (120.0, 1850.0))
         self.assertEqual(
             {cell.zone_id for cell in prescription.cells},
-            {"EL", "L", "M", "H", "EH"},
+            {"ELF", "ELN", "L", "M", "H", "EH"},
         )
         self.assertEqual(prescription.cells[0].cell_id, "R01C01")
         self.assertEqual(prescription.cells[-1].cell_id, "R06C05")

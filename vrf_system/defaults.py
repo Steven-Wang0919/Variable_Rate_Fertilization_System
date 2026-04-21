@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
-DEFAULT_COMPARE_RUN_NAME = "20260326T200342_compare_all"
+DEFAULT_COMPARE_RUN_NAME = "20260422T001922_compare_all"
 
 
 def _first_existing_path(*candidates: Path) -> Path:
